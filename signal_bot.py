@@ -1,43 +1,21 @@
-import os
-from threading import Thread
-from flask import Flask
-
-app = Flask('')
-
-
-@app.route('/')
-def home():
-  return 'Bot is alive!'
-
-
-def run():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-
-def keep_alive():
-  t = Thread(target=run)
-  t.daemon = True
-  t.start()
-
-
-# تشغيل سيرفر الويب عشان Render ما يطفي البوت
-keep_alive()
-
 # -*- coding: utf-8 -*-
-import asyncio
-import json
 import os
+import json
 import time
 import random
+import asyncio
+from threading import Thread
 from datetime import datetime, timedelta
 
 import requests
 import pandas as pd
+from flask import Flask
+from waitress import serve
 from pyquotex.stable_api import Quotex
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
+# ============ إعدادات عامة ============
 SESSION_FILE = "qx_session.json"
 NUM_PAIRS = 15
 TRADE_DURATION_MIN = 1
@@ -58,7 +36,28 @@ CRYPTO_SYMBOLS = [
     "ZEC", "XLM", "TRX", "LINK", "UNI", "AXS", "MATIC", "SHIB", "TRUMP"
 ]
 
+# ============ Flask Keep Alive ============
+app = Flask('')
 
+
+@app.route('/')
+def home():
+    return 'Bot is alive!'
+
+
+def run_flask():
+    port = int(os.environ.get('PORT', 8080))
+    # استخدام waitress بدل خادم التطوير
+    serve(app, host='0.0.0.0', port=port)
+
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
+
+# ============ دوال البوت ============
 def is_crypto(asset_name):
     base = asset_name.replace("_otc", "").upper()
     for sym in CRYPTO_SYMBOLS:
@@ -156,7 +155,11 @@ async def connect_client():
         print("no session file, run refresh.py first")
         return None
     client = Quotex(email="x@x.com", password="x", lang="en")
-    client.set_session(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", cookies=cookies_str, ssid=ssid)
+    client.set_session(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        cookies=cookies_str,
+        ssid=ssid
+    )
     check, reason = await client.connect()
     if not check:
         print(f"connect failed: {reason}")
@@ -250,6 +253,9 @@ async def main_loop():
 
 
 if __name__ == "__main__":
+    # تشغيل سيرفر الويب عشان Render ما يطفي البوت
+    keep_alive()
+
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
