@@ -15,7 +15,6 @@ from pyquotex.stable_api import Quotex
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-# ============ إعدادات عامة ============
 SESSION_FILE = "qx_session.json"
 NUM_PAIRS = 15
 TRADE_DURATION_MIN = 1
@@ -36,7 +35,6 @@ CRYPTO_SYMBOLS = [
     "ZEC", "XLM", "TRX", "LINK", "UNI", "AXS", "MATIC", "SHIB", "TRUMP"
 ]
 
-# ============ Flask Keep Alive ============
 app = Flask('')
 
 
@@ -47,7 +45,6 @@ def home():
 
 def run_flask():
     port = int(os.environ.get('PORT', 8080))
-    # استخدام waitress بدل خادم التطوير
     serve(app, host='0.0.0.0', port=port)
 
 
@@ -57,7 +54,6 @@ def keep_alive():
     t.start()
 
 
-# ============ دوال البوت ============
 def is_crypto(asset_name):
     base = asset_name.replace("_otc", "").upper()
     for sym in CRYPTO_SYMBOLS:
@@ -67,6 +63,10 @@ def is_crypto(asset_name):
 
 
 def load_session():
+    cookies_env = os.environ.get("QX_COOKIES")
+    ssid_env = os.environ.get("QX_SSID")
+    if cookies_env and ssid_env and cookies_env != "x" and ssid_env != "x":
+        return cookies_env, ssid_env
     if not os.path.exists(SESSION_FILE):
         return None, None
     with open(SESSION_FILE, "r", encoding="utf-8") as f:
@@ -75,7 +75,6 @@ def load_session():
 
 
 def clean_candles(candles):
-    """يرتب الشموع زمنياً ويزيل التكرار والفجوات الفاسدة"""
     items = []
     for c in candles:
         try:
@@ -112,7 +111,6 @@ def analyze_strength(closes):
     ema_diff_pct = abs(ema_fast.iloc[-1] - ema_slow.iloc[-1]) / ema_slow.iloc[-1] * 100
     direction = "up" if ema_fast.iloc[-1] > ema_slow.iloc[-1] else "down"
 
-    # شرط تأكيد: اخر 3 شمعات نفس الاتجاه العام
     last3 = s.iloc[-3:]
     confirm_up = last3.iloc[-1] > last3.iloc[0]
     confirmed = (direction == "up" and confirm_up) or (direction == "down" and not confirm_up)
@@ -152,7 +150,7 @@ def send_telegram(asset, direction, entry_time, duration_min):
 async def connect_client():
     cookies_str, ssid = load_session()
     if not cookies_str or not ssid:
-        print("no session file, run refresh.py first")
+        print("no session available")
         return None
     client = Quotex(email="x@x.com", password="x", lang="en")
     client.set_session(
@@ -253,9 +251,7 @@ async def main_loop():
 
 
 if __name__ == "__main__":
-    # تشغيل سيرفر الويب عشان Render ما يطفي البوت
     keep_alive()
-
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
