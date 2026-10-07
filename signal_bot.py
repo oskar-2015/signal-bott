@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import os
 import json
 import time
@@ -63,10 +63,12 @@ def is_crypto(asset_name):
 
 
 def load_session():
-    cookies_env = os.environ.get("QX_COOKIES")
-    ssid_env = os.environ.get("QX_SSID")
-    if cookies_env and ssid_env and cookies_env != "x" and ssid_env != "x":
-        return cookies_env, ssid_env
+    env_cookies = os.environ.get("QX_COOKIES")
+    env_ssid = os.environ.get("QX_SSID")
+    if env_cookies and env_ssid:
+        print("session loaded from environment variables")
+        return env_cookies, env_ssid
+
     if not os.path.exists(SESSION_FILE):
         return None, None
     with open(SESSION_FILE, "r", encoding="utf-8") as f:
@@ -150,7 +152,7 @@ def send_telegram(asset, direction, entry_time, duration_min):
 async def connect_client():
     cookies_str, ssid = load_session()
     if not cookies_str or not ssid:
-        print("no session available")
+        print("no session data available")
         return None
     client = Quotex(email="x@x.com", password="x", lang="en")
     client.set_session(
