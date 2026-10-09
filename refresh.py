@@ -39,7 +39,7 @@ async def main():
 
         page.on("websocket", on_websocket)
 
-        await page.goto("https://qxbroker.com/en/sign-in")
+        await page.goto("https://quotex.com/ar/sign-in")
 
         print("Log in manually in the browser window now.")
         print("Waiting 90 seconds...")
