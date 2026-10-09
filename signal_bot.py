@@ -26,7 +26,7 @@ MIN_PAYOUT = 70
 CANDLE_HISTORY_SECONDS = 10800
 MIN_STRENGTH = 15
 
-PLATFORM_LINK = "https://broker-qx.pro/sign-up/?lid=2204577"
+PLATFORM_LINK = "https://broker-qx.pro/sign-up/?lid=2384798"
 CHANNEL_LINK = 'قناة أوسكار 🔥'
 
 CRYPTO_SYMBOLS = [
