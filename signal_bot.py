@@ -154,7 +154,7 @@ async def connect_client():
     if not cookies_str or not ssid:
         print("no session data available")
         return None
-    client = Quotex(email="x@x.com", password="x", lang="en")
+    client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.io")
     client.set_session(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         cookies=cookies_str,
