@@ -1,19 +1,27 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import json
 import time
-import random
 import asyncio
 from threading import Thread
 from datetime import datetime, timedelta
 
 import requests
 import pandas as pd
-from flask import Flask
 from waitress import serve
 from pyquotex.stable_api import Quotex
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from app import app as web_app
+from trade_executor import execute_signal_for_all_users
+
+try:
+    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+except ImportError:
+    TELEGRAM_BOT_TOKEN = None
+    TELEGRAM_CHAT_ID = None
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or TELEGRAM_CHAT_ID
 
 SESSION_FILE = "qx_session.json"
 NUM_PAIRS = 15
@@ -35,17 +43,12 @@ CRYPTO_SYMBOLS = [
     "ZEC", "XLM", "TRX", "LINK", "UNI", "AXS", "MATIC", "SHIB", "TRUMP"
 ]
 
-app = Flask('')
-
-
-@app.route('/')
-def home():
-    return 'Bot is alive!'
+background_tasks = set()
 
 
 def run_flask():
     port = int(os.environ.get('PORT', 8080))
-    serve(app, host='0.0.0.0', port=port)
+    serve(web_app, host='0.0.0.0', port=port)
 
 
 def keep_alive():
@@ -221,35 +224,57 @@ async def pick_best_signal(client, assets):
     return best
 
 
+async def delayed_execute(asset, trade_dir):
+    # ننتظر حتى وقت الدخول المعلن في الإشارة ثم ننفذ للمستخدمين
+    await asyncio.sleep(LEAD_TIME_SEC)
+    await execute_signal_for_all_users(asset, trade_dir)
+
+
 async def main_loop():
-    client = await connect_client()
-    if not client:
-        return
+    client = None
     cycle = 0
     while True:
-        cycle += 1
-        print(f"cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
-        top_assets = await get_top_open_assets(client)
-        if not top_assets:
-            print("no open assets this cycle")
-            await asyncio.sleep(LEAD_TIME_SEC)
-            continue
+        try:
+            if client is None:
+                client = await connect_client()
+                if client is None:
+                    print("connect failed, retrying in 60s")
+                    await asyncio.sleep(60)
+                    continue
 
-        best = await pick_best_signal(client, top_assets)
-        if best is None:
-            print("no strong confirmed signal this cycle, skipping")
-            await asyncio.sleep(LEAD_TIME_SEC)
-            continue
+            cycle += 1
+            print(f"cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
+            top_assets = await get_top_open_assets(client)
+            if not top_assets:
+                print("no open assets this cycle")
+                await asyncio.sleep(LEAD_TIME_SEC)
+                continue
 
-        asset, payout, strength, direction = best
-        print(f"best: {asset} payout={payout} strength={strength:.2f} dir={direction}")
+            best = await pick_best_signal(client, top_assets)
+            if best is None:
+                print("no strong confirmed signal this cycle, skipping")
+                await asyncio.sleep(LEAD_TIME_SEC)
+                continue
 
-        entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
-        send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
+            asset, payout, strength, direction = best
+            print(f"best: {asset} payout={payout} strength={strength:.2f} dir={direction}")
 
-        wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
-        print(f"waiting {wait_seconds}s")
-        await asyncio.sleep(wait_seconds)
+            entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
+            send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
+
+            trade_dir = "call" if direction == "up" else "put"
+            task = asyncio.create_task(delayed_execute(asset, trade_dir))
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
+
+            wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
+            print(f"waiting {wait_seconds}s")
+            await asyncio.sleep(wait_seconds)
+
+        except Exception as e:
+            print(f"main loop error: {e}, reconnecting in 30s")
+            client = None
+            await asyncio.sleep(30)
 
 
 if __name__ == "__main__":
