@@ -27,7 +27,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 DEVICE_COOKIE = "oscar_device"
-APK_DOWNLOAD_URL = os.environ.get("APK_DOWNLOAD_URL", "/static/OscarLinker.apk")
+APK_DOWNLOAD_URL = os.environ.get("APK_DOWNLOAD_URL", "#")
 
 init_db()
 
@@ -78,7 +78,6 @@ def get_user(key):
 
 
 def ensure_user(key):
-    """ينشئ المستخدم إن لم يكن موجوداً ويعيده."""
     user = get_user(key)
     if user is None:
         conn = get_db()
@@ -194,10 +193,7 @@ def link_session():
 
 @app.route("/api/link", methods=["POST"])
 def api_link():
-    """
-    يستعمله تطبيق الأندرويد (Oscar Linker) على هاتف المستخدم لرفع الجلسة بعد الالتقاط.
-    ينشئ المستخدم تلقائياً إذا لم يكن موجوداً.
-    """
+    """يستعمله تطبيق الأندرويد لرفع الجلسة بعد الالتقاط."""
     data = request.get_json(silent=True) or {}
     key = str(data.get("license_key", "")).strip().upper()
     ssid = str(data.get("ssid", "")).strip()
@@ -210,7 +206,6 @@ def api_link():
     if not ssid:
         return jsonify({"ok": False, "error": "SSID مفقود"}), 400
 
-    # إنشاء المستخدم تلقائياً حتى لو لم يزُر الموقع من قبل
     ensure_user(key)
 
     try:
