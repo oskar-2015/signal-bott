@@ -1,6 +1,6 @@
-requests
-pandas
-git+https://github.com/cleitonleonel/pyquotex.git
-Flask
-waitress
-cryptography
+Flask>=3.0.0
+cryptography>=41.0.0
+pyquotex
+requests>=2.31.0
+pandas>=2.0.0
+waitress>=3.0.0
