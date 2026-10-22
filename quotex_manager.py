@@ -11,7 +11,7 @@ from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-QX_HOST = os.environ.get("QX_HOST", "qxbroker.com")
+QX_HOST = os.environ.get("QX_HOST", "quotex.com")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
