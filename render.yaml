@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: signal-bott
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python signal_bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.11.0
