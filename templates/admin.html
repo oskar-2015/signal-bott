@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oscar Trader AI - لوحة المشرف</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container wide">
+        <div class="logo">OSCAR<span>TRADER AI</span> — ADMIN</div>
+        <h1>🛠️ لوحة تحكم المشرف</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="alert {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <span class="stat-number">{{ total_users }}</span>
+                <span class="stat-label">إجمالي المسجلين</span>
+            </div>
+            <div class="stat-box active">
+                <span class="stat-number">{{ active_users }}</span>
+                <span class="stat-label">التداول الآلي مفعّل</span>
+            </div>
+        </div>
+
+        <!-- 1. إنشاء مفتاح -->
+        <div class="card highlight">
+            <h3>➕ إنشاء مفتاح تفعيل</h3>
+            <form action="/admin/create_key" method="POST">
+                <label class="field-label">مدة المفتاح</label>
+                <select name="hours">
+                    {% for h, label in key_duration_options %}
+                        <option value="{{ h }}" {% if h == 24 %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">إنشاء مفتاح</button>
+            </form>
+        </div>
+
+        <!-- 2. قائمة المفاتيح -->
+        <div class="card">
+            <h3>📋 المفاتيح</h3>
+            {% if licenses %}
+            <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>المفتاح</th>
+                        <th>ينتهي</th>
+                        <th>الحالة</th>
+                        <th>الجهاز</th>
+                        <th>إجراءات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lic in licenses %}
+                    <tr>
+                        <td>
+                            <code class="key-cell" id="key-{{ loop.index }}">{{ lic.key }}</code>
+                            <button type="button" class="btn-small btn-copy" onclick="copyKey('key-{{ loop.index }}', event)" title="نسخ">📋</button>
+                        </td>
+                        <td style="font-size: 12px;">{{ lic.expires_at[:16].replace('T', ' ') ~ ' UTC' if lic.expires_at else 'للأبد' }}</td>
+                        <td>
+                            {% if lic.is_active %}
+                                <span class="badge active">فعّال</span>
+                            {% else %}
+                                <span class="badge inactive">موقوف</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 12px;">
+                            {% if lic.device_ip %}
+                                🔒 مربوط
+                                <form action="/admin/reset_device" method="POST" style="display:inline;">
+                                    <input type="hidden" name="key" value="{{ lic.key }}">
+                                    <button type="submit" class="btn-small btn-secondary">إعادة تعيين</button>
+                                </form>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            <form action="/admin/toggle_key" method="POST" style="display:inline;">
+                                <input type="hidden" name="key" value="{{ lic.key }}">
+                                {% if lic.is_active %}
+                                    <input type="hidden" name="action" value="deactivate">
+                                    <button type="submit" class="btn-small btn-warning">إيقاف مؤقت</button>
+                                {% else %}
+                                    <input type="hidden" name="action" value="activate">
+                                    <button type="submit" class="btn-small btn-success">تفعيل</button>
+                                {% endif %}
+                            </form>
+                            <form action="/admin/delete_key" method="POST" style="display:inline;"
+                                  onsubmit="return confirm('حذف نهائي للمفتاح وكل بيانات المستخدم؟');">
+                                <input type="hidden" name="key" value="{{ lic.key }}">
+                                <button type="submit" class="btn-small btn-danger">حذف نهائي</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+                <p style="text-align: center; color: #666;">لا توجد مفاتيح بعد</p>
+            {% endif %}
+        </div>
+
+        <!-- 3. حساب المشرف -->
+        <div class="card {% if not master_linked %}highlight{% endif %}">
+            <h3>👑 حساب المشرف (اختياري)</h3>
+            {% if master_linked %}
+                <p style="color: #81c784; text-align: center;">
+                    ✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}
+                </p>
+            {% else %}
+                <p class="hint">حساب المشرف يلزم فقط لفتح صفقات يدوية أو لتداول الإشارات على حسابك أنت.</p>
+            {% endif %}
+
+            <details {% if not master_linked %}open{% endif %}>
+                <summary>{% if master_linked %}تحديث الربط{% else %}ربط الحساب{% endif %}</summary>
+                <form action="/admin/set_master" method="POST" class="slow">
+                    <input type="email" name="master_email" placeholder="البريد الإلكتروني">
+                    <input type="password" name="master_password" placeholder="كلمة المرور">
+                    <p class="hint">أو الصق الجلسة مباشرة بدل البريد وكلمة المرور:</p>
+                    <input type="text" name="master_ssid" placeholder="SSID" style="direction:ltr;">
+                    <textarea name="master_cookies" placeholder="Cookies"></textarea>
+                    <button type="submit" class="btn-primary">🔗 ربط</button>
+                </form>
+            </details>
+
+            <form action="/admin/save_master_settings" method="POST">
+                <label class="field-label">النسبة من رصيد المشرف (%)</label>
+                <input type="number" name="master_pct" step="0.1" min="0.1" max="100" value="{{ master_pct }}" required>
+
+                <label class="field-label">نوع حساب المشرف</label>
+                <select name="master_account_type">
+                    <option value="demo" {% if master_acct == 'demo' %}selected{% endif %}>حساب تجريبي (Demo)</option>
+                    <option value="live" {% if master_acct == 'live' %}selected{% endif %}>حساب حقيقي (Live)</option>
+                </select>
+
+                <label class="check-row">
+                    <input type="checkbox" name="master_follow" {% if master_follow %}checked{% endif %}>
+                    حساب المشرف يتداول إشارات البوت أيضاً
+                </label>
+
+                <button type="submit">حفظ الإعدادات</button>
+            </form>
+        </div>
+
+        <!-- 4. صفقة يدوية -->
+        <div class="card">
+            <h3>🚀 صفقة يدوية ونسخها للمتابعين</h3>
+            <form action="/admin/open_trade" method="POST" class="slow">
+                <label class="field-label">الأصل / الزوج</label>
+                <select name="asset" required>
+                    <optgroup label="أزواج OTC (الويكند)">
+                        {% for a in otc_assets %}
+                            <option value="{{ a }}" {% if a == 'EURUSD_otc' %}selected{% endif %}>{{ a }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    <optgroup label="الأزواج الحقيقية (أيام الأسبوع)">
+                        {% for a in real_assets %}
+                            <option value="{{ a }}">{{ a }}</option>
+                        {% endfor %}
+                    </optgroup>
+                </select>
+
+                <label class="field-label">الاتجاه</label>
+                <select name="direction">
+                    <option value="call">CALL (شراء)</option>
+                    <option value="put">PUT (بيع)</option>
+                </select>
+
+                <label class="field-label">المدة</label>
+                <select name="expiry">
+                    {% for seconds, label in expiry_options %}
+                        <option value="{{ seconds }}" {% if seconds == 60 %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+
+                <label class="field-label">نوع الوقت</label>
+                <select name="time_mode">
+                    <option value="TIMER" selected>وقت ثابت (Fixed Time)</option>
+                    <option value="MARGINAL">وقت متحرك (Marginal)</option>
+                </select>
+
+                <button type="submit" class="btn-primary">📈 فتح ونسخ الصفقة</button>
+            </form>
+        </div>
+
+        <!-- 5. المستخدمون -->
+        <div class="card">
+            <h3>👥 المستخدمون</h3>
+            {% if users_list %}
+            <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>المفتاح</th>
+                        <th>الحساب</th>
+                        <th>الربط</th>
+                        <th>التداول</th>
+                        <th>الدخول</th>
+                        <th>رصيد البداية</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users_list %}
+                    <tr>
+                        <td><code style="font-size: 10px;">{{ u.license_key }}</code></td>
+                        <td>{{ 'تجريبي' if u.account_type == 'demo' else 'حقيقي' }}</td>
+                        <td>{{ '✅' if u.quotex_ssid else '—' }}</td>
+                        <td>
+                            {% if u.is_copying %}
+                                <span class="badge active">مفعّل</span>
+                            {% else %}
+                                <span class="badge inactive">معطّل</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 11px;">
+                            {% if u.trade_mode == 'percent' %}{{ u.trade_value }}%{% else %}${{ u.trade_value }}{% endif %}
+                        </td>
+                        <td style="font-size: 11px;">{% if u.start_balance %}${{ "%.2f"|format(u.start_balance) }}{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+                <p style="text-align: center; color: #666;">لا يوجد مستخدمون بعد</p>
+            {% endif %}
+        </div>
+
+        <!-- 6. سجل الصفقات -->
+        <div class="card">
+            <h3>📜 آخر الصفقات</h3>
+            {% if logs %}
+            <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>الأصل</th>
+                        <th>الاتجاه</th>
+                        <th>مبلغ المشرف</th>
+                        <th>المدة</th>
+                        <th>المنسوخون</th>
+                        <th>التاريخ (UTC)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.asset }}</td>
+                        <td>{{ log.direction|upper }}</td>
+                        <td>{% if log.amount %}${{ "%.2f"|format(log.amount) }}{% else %}إشارة{% endif %}</td>
+                        <td>{{ log.expiry }}s</td>
+                        <td>{{ log.follower_count }}</td>
+                        <td style="font-size: 12px;">{{ log.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+                <p style="text-align: center; color: #666;">لا توجد صفقات بعد</p>
+            {% endif %}
+        </div>
+
+        <a href="/admin/logout" class="logout">تسجيل خروج</a>
+    </div>
+
+    <script>
+        function copyKey(id, event) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const text = el.textContent.trim();
+            navigator.clipboard.writeText(text).then(function () {
+                const btn = event.target;
+                const old = btn.textContent;
+                btn.textContent = '✓';
+                setTimeout(function () { btn.textContent = old; }, 1000);
+            }).catch(function () {
+                alert('انسخ المفتاح يدوياً: ' + text);
+            });
+        }
+
+        document.querySelectorAll('form.slow').forEach(function (f) {
+            f.addEventListener('submit', function () {
+                const b = f.querySelector('button[type=submit]');
+                if (b) {
+                    setTimeout(function () {
+                        b.disabled = true;
+                        b.textContent = 'جاري التنفيذ... قد يستغرق دقيقة';
+                    }, 50);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

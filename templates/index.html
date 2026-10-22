@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oscar Trader AI - تسجيل الدخول</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="logo">OSCAR<span>TRADER AI</span></div>
+        <h1>أدخل مفتاح التفعيل</h1>
+        <p>للوصول إلى لوحة التداول الآلي، يرجى إدخال مفتاح التفعيل الخاص بك</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="alert {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <form action="/activate" method="POST">
+            <input type="text" name="license_key" placeholder="OSCAR-XXXX-XXXX-XXXX" required autocomplete="off" autocapitalize="characters">
+            <button type="submit">تفعيل الدخول</button>
+        </form>
+
+        <p class="disclaimer">
+            تنبيه: التداول في الخيارات الثنائية ينطوي على مخاطر عالية وقد تخسر أموالك بالكامل.
+            الإشارات تحليل آلي وليست نصيحة مالية ولا تضمن أي ربح، وأنت المسؤول الوحيد عن قراراتك.
+        </p>
+    </div>
+</body>
+</html>

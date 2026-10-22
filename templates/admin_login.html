@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oscar Trader AI - دخول المشرف</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="logo">OSCAR<span>TRADER AI</span></div>
+        <h1>🔐 دخول المشرف</h1>
+        <p>هذه الصفحة مخصصة للمشرف فقط</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="alert {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <form action="/admin" method="POST">
+            <input type="password" name="password" placeholder="كلمة مرور المشرف" required autocomplete="off">
+            <button type="submit">دخول</button>
+        </form>
+
+        <a href="/" class="logout">← العودة للموقع</a>
+    </div>
+</body>
+</html>
