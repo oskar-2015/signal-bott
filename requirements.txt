@@ -1,6 +1,6 @@
 Flask>=3.0.0
 cryptography>=41.0.0
-pyquotex
+git+https://github.com/cleitonleonel/pyquotex.git
 requests>=2.31.0
 pandas>=2.0.0
 waitress>=3.0.0
