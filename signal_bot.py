@@ -12,7 +12,7 @@ from waitress import serve
 from pyquotex.stable_api import Quotex
 
 from app import app as web_app
-from trade_executor import execute_signal_for_all_users
+from quotex_manager import copy_manager
 
 try:
     from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -43,12 +43,10 @@ CRYPTO_SYMBOLS = [
     "ZEC", "XLM", "TRX", "LINK", "UNI", "AXS", "MATIC", "SHIB", "TRUMP"
 ]
 
-background_tasks = set()
-
 
 def run_flask():
     port = int(os.environ.get('PORT', 8080))
-    serve(web_app, host='0.0.0.0', port=port)
+    serve(web_app, host='0.0.0.0', port=port, threads=16)
 
 
 def keep_alive():
@@ -224,12 +222,6 @@ async def pick_best_signal(client, assets):
     return best
 
 
-async def delayed_execute(asset, trade_dir):
-    # ننتظر حتى وقت الدخول المعلن في الإشارة ثم ننفذ للمستخدمين
-    await asyncio.sleep(LEAD_TIME_SEC)
-    await execute_signal_for_all_users(asset, trade_dir)
-
-
 async def main_loop():
     client = None
     cycle = 0
@@ -262,10 +254,11 @@ async def main_loop():
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
             send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
 
+            # نسخ الصفقة لكل المستخدمين الفعّالين عند وقت الدخول المعلن
             trade_dir = "call" if direction == "up" else "put"
-            task = asyncio.create_task(delayed_execute(asset, trade_dir))
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
+            copy_manager.submit(copy_manager.broadcast_signal(
+                asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
+            ))
 
             wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
             print(f"waiting {wait_seconds}s")
@@ -278,6 +271,7 @@ async def main_loop():
 
 
 if __name__ == "__main__":
+    copy_manager.start_background_loop()
     keep_alive()
     try:
         asyncio.run(main_loop())
