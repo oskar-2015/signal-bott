@@ -28,7 +28,7 @@
         </div>
         {% endif %}
 
-        <!-- 1. مفتاح التفعيل -->
+        <!-- مفتاح التفعيل -->
         <div class="card">
             <h3>🔑 مفتاح التفعيل</h3>
             <p class="hint" style="text-align: center;">
@@ -36,12 +36,12 @@
             </p>
         </div>
 
-        <!-- 2. ربط حساب Quotex -->
+        <!-- ربط الحساب -->
         <div class="card {% if not user.quotex_ssid %}highlight{% endif %}">
             <h3>🔗 ربط حساب Quotex</h3>
             {% if user.quotex_ssid %}
-                <p style="color: #81c784; text-align: center; margin-bottom: 10px;">
-                    ✅ الحساب مرتبط
+                <p style="color: #81c784; text-align: center; margin-bottom: 10px; font-size: 16px;">
+                    ✅ الحساب مرتبط بنجاح
                 </p>
                 {% if user.quotex_email %}
                 <p class="hint" style="text-align: center;">
@@ -49,35 +49,46 @@
                 </p>
                 {% endif %}
             {% else %}
-                <details open>
-                    <summary>الربط بالبريد وكلمة المرور</summary>
-                    <p class="hint">
-                        قد تمنع حماية Quotex هذه الطريقة أو تطلب رمز تحقق. إذا فشلت استخدم الطريقة الثانية.
-                    </p>
-                    <form action="/auto_login" method="POST" class="slow">
-                        <input type="email" name="email" placeholder="البريد الإلكتروني" required autocomplete="off">
-                        <input type="password" name="password" placeholder="كلمة المرور" required autocomplete="off">
-                        <button type="submit" class="btn-primary">ربط الحساب</button>
-                    </form>
-                </details>
+                <p style="text-align: center; color: #f0e0a0; font-weight: 700; margin-bottom: 20px;">
+                    لربط حسابك، حمّل تطبيق Oscar Linker واتبع الخطوات
+                </p>
 
-                <details>
-                    <summary>الربط بالجلسة (SSID)</summary>
+                <a href="{{ apk_url }}" class="btn-primary" 
+                   style="display:block; text-align:center; padding:16px; text-decoration:none; border-radius:10px; font-weight:700; margin-bottom:15px; font-size:16px;">
+                    📥 تحميل تطبيق الربط (APK)
+                </a>
+
+                <div style="background: #0a0a0a; padding: 18px; border-radius: 10px; border: 1px solid #222;">
+                    <h4 style="color: #d4af37; text-align: right; margin-bottom: 12px; font-size: 15px;">
+                        خطوات الربط (3 خطوات فقط):
+                    </h4>
+                    <ol style="color: #ccc; font-size: 14px; line-height: 2; padding-right: 20px;">
+                        <li>نزّل التطبيق وثبّته على هاتفك</li>
+                        <li>افتح التطبيق وأدخل مفتاحك: <code>{{ user.license_key }}</code></li>
+                        <li>سجّل دخولك إلى Quotex داخل التطبيق</li>
+                    </ol>
+                    <p style="text-align: center; color: #81c784; margin-top: 12px; font-weight: 700; margin-bottom: 0;">
+                        بعدها سيتم الربط تلقائياً وستعود هنا لتفعيل التداول ✅
+                    </p>
+                </div>
+
+                <details style="margin-top: 20px;">
+                    <summary>خيارات متقدمة (للمشرف فقط)</summary>
                     <p class="hint">
-                        شغّل برنامج الربط على كمبيوترك وسيرفع الجلسة تلقائياً بمفتاحك، أو الصق القيم هنا يدوياً.
+                        يمكنك لصق SSID يدوياً إذا كنت تعرفه مسبقاً.
                     </p>
                     <form action="/link_session" method="POST" class="slow">
                         <input type="email" name="email" placeholder="البريد (اختياري)" autocomplete="off">
                         <input type="text" name="ssid" placeholder="SSID" required autocomplete="off" style="direction:ltr;">
-                        <textarea name="cookies" placeholder="Cookies (اختياري لكن يُنصح به)"></textarea>
-                        <button type="submit" class="btn-primary">ربط بالجلسة</button>
+                        <textarea name="cookies" placeholder="Cookies (اختياري)"></textarea>
+                        <button type="submit" class="btn-secondary">ربط بالجلسة</button>
                     </form>
                 </details>
             {% endif %}
         </div>
 
         {% if user.quotex_ssid %}
-        <!-- 3. إعدادات النسخ -->
+        <!-- إعدادات النسخ -->
         <div class="card">
             <h3>⚙️ إعدادات التداول</h3>
             <form action="/save_settings" method="POST">
@@ -123,7 +134,7 @@
             {% endif %}
         </div>
 
-        <!-- 4. حالة التداول الآلي -->
+        <!-- حالة التداول الآلي -->
         <div class="card {% if user.is_copying %}highlight{% endif %}">
             <h3>📊 حالة التداول الآلي</h3>
             <p style="text-align: center; margin-bottom: 15px;">
@@ -164,7 +175,7 @@
             </form>
         </div>
 
-        <!-- 5. فصل الحساب -->
+        <!-- فصل الحساب -->
         <div class="card">
             <h3>🔌 فصل الحساب</h3>
             <p class="hint">
@@ -200,13 +211,14 @@
         });
 
         function updateLabels() {
-            const mode = document.getElementById('tradeMode').value;
+            const mode = document.getElementById('tradeMode');
+            if (!mode) return;
             const tradeValueLabel = document.getElementById('tradeValueLabel');
             const tradeValueHint = document.getElementById('tradeValueHint');
             const maxLossLabel = document.getElementById('maxLossLabel');
             const maxProfitLabel = document.getElementById('maxProfitLabel');
 
-            if (mode === 'fixed') {
+            if (mode.value === 'fixed') {
                 tradeValueLabel.textContent = 'قيمة الدخول ($)';
                 tradeValueHint.textContent = 'مثال: 5 = 5$ لكل صفقة';
                 maxLossLabel.textContent = '🛑 إيقاف تلقائي عند الخسارة ($)';
