@@ -13,79 +13,95 @@ def _patch_pyquotex_domain():
     """يُصلح الروابط الثابتة داخل pyquotex للعمل مع quotex.com"""
     patched = []
 
-    # 1) Patch resource module (constants)
+    def fix_url(s):
+        """يحوّل كل qxbroker إلى quotex مع الحفاظ على الرقم (2 أو غيره)"""
+        if 'qxbroker.com' not in s:
+            return s
+        return (
+            s.replace('ws2.qxbroker.com', 'ws2.quotex.com')
+             .replace('ws.qxbroker.com', 'ws.quotex.com')
+             .replace('qxbroker.com', 'quotex.com')
+        )
+
+    # 1) Patch resource module
     try:
         from pyquotex import resource as res_mod
         for attr_name in dir(res_mod):
-            obj = getattr(res_mod, attr_name)
-            if isinstance(obj, str) and 'qxbroker.com' in obj:
-                new_val = obj.replace('ws2.qxbroker.com', 'ws.quotex.com') \
-                             .replace('ws.qxbroker.com', 'ws.quotex.com') \
-                             .replace('qxbroker.com', 'quotex.com')
-                setattr(res_mod, attr_name, new_val)
-                patched.append(f"resource.{attr_name}")
+            try:
+                obj = getattr(res_mod, attr_name)
+                if isinstance(obj, str) and 'qxbroker.com' in obj:
+                    setattr(res_mod, attr_name, fix_url(obj))
+                    patched.append(f"resource.{attr_name}")
+            except Exception:
+                pass
         if hasattr(res_mod, 'Resource'):
             for attr_name in dir(res_mod.Resource):
-                obj = getattr(res_mod.Resource, attr_name)
-                if isinstance(obj, str) and 'qxbroker.com' in obj:
-                    new_val = obj.replace('ws2.qxbroker.com', 'ws.quotex.com') \
-                                 .replace('ws.qxbroker.com', 'ws.quotex.com') \
-                                 .replace('qxbroker.com', 'quotex.com')
-                    setattr(res_mod.Resource, attr_name, new_val)
-                    patched.append(f"Resource.{attr_name}")
+                try:
+                    obj = getattr(res_mod.Resource, attr_name)
+                    if isinstance(obj, str) and 'qxbroker.com' in obj:
+                        setattr(res_mod.Resource, attr_name, fix_url(obj))
+                        patched.append(f"Resource.{attr_name}")
+                except Exception:
+                    pass
     except Exception as e:
-        print(f"[PATCH resource] {e}")
+        print(f"[PATCH resource] {e}", flush=True)
 
-    # 2) Patch WebSocket client - intercept __init__ to fix url
+    # 2) Patch WebSocket client
     try:
         import pyquotex.ws.client as ws_mod
         if hasattr(ws_mod, 'WebsocketClient'):
             original_init = ws_mod.WebsocketClient.__init__
             def patched_init(self, *args, **kwargs):
                 original_init(self, *args, **kwargs)
-                # Fix any qxbroker URL to quotex
-                for attr in ('url', 'ws_url', 'socket_url', '_url'):
+                for attr in ('url', 'ws_url', 'socket_url', '_url', 'base_url', 'host'):
                     if hasattr(self, attr):
                         cur = getattr(self, attr)
                         if isinstance(cur, str) and 'qxbroker' in cur:
-                            new = cur.replace('ws2.qxbroker.com', 'ws.quotex.com') \
-                                     .replace('ws.qxbroker.com', 'ws.quotex.com') \
-                                     .replace('qxbroker.com', 'quotex.com')
-                            setattr(self, attr, new)
+                            setattr(self, attr, fix_url(cur))
                             patched.append(f"WSClient.{attr}")
             ws_mod.WebsocketClient.__init__ = patched_init
     except Exception as e:
-        print(f"[PATCH ws.client] {e}")
+        print(f"[PATCH ws.client] {e}", flush=True)
 
-    # 3) Patch api module - base URLs
+    # 3) Patch api module
     try:
         import pyquotex.api as api_mod
         if hasattr(api_mod, 'WebsocketClient'):
             original_init = api_mod.WebsocketClient.__init__
             def patched_init2(self, *args, **kwargs):
                 original_init(self, *args, **kwargs)
-                for attr in ('url', 'ws_url', 'socket_url', '_url'):
+                for attr in ('url', 'ws_url', 'socket_url', '_url', 'base_url', 'host'):
                     if hasattr(self, attr):
                         cur = getattr(self, attr)
                         if isinstance(cur, str) and 'qxbroker' in cur:
-                            new = cur.replace('ws2.qxbroker.com', 'ws.quotex.com') \
-                                     .replace('ws.qxbroker.com', 'ws.quotex.com') \
-                                     .replace('qxbroker.com', 'quotex.com')
-                            setattr(self, attr, new)
+                            setattr(self, attr, fix_url(cur))
                             patched.append(f"API.WSClient.{attr}")
             api_mod.WebsocketClient.__init__ = patched_init2
     except Exception as e:
-        print(f"[PATCH api] {e}")
+        print(f"[PATCH api] {e}", flush=True)
+
+    # 4) Patch constants/URLs في أي مكان آخر
+    try:
+        import pyquotex.constants as const_mod
+        for attr_name in dir(const_mod):
+            try:
+                obj = getattr(const_mod, attr_name)
+                if isinstance(obj, str) and 'qxbroker.com' in obj:
+                    setattr(const_mod, attr_name, fix_url(obj))
+                    patched.append(f"constants.{attr_name}")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     if patched:
-        print(f"[PYQUOTEX PATCH] ✅ Patched: {', '.join(set(patched))}")
+        print(f"[PYQUOTEX PATCH] ✅ Patched: {', '.join(sorted(set(patched)))}", flush=True)
     else:
-        print("[PYQUOTEX PATCH] ⚠️ No patches applied - library may already be updated")
+        print("[PYQUOTEX PATCH] ⚠️ No patches applied - library may already be updated", flush=True)
 
 
 _patch_pyquotex_domain()
 
-# Now import normally
 from pyquotex.stable_api import Quotex
 
 from database import (
@@ -133,7 +149,6 @@ class QuotexCopyManager:
         self._last_attempt = {}
         self._fail_count = {}
 
-    # ─── Background loop ────────────────────────────────────
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
             return
@@ -163,7 +178,6 @@ class QuotexCopyManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    # ─── Cache ──────────────────────────────────────────────
     def get_cached_stats(self, user_id):
         item = self._stats_cache.get(user_id)
         if not item:
@@ -189,7 +203,6 @@ class QuotexCopyManager:
         self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 120)
         return stats
 
-    # ─── Client creation ────────────────────────────────────
     def _make_client(self, ssid, cookies, host):
         client = Quotex(email="", password="", lang="en", host=host)
         args = {"user_agent": USER_AGENT}
@@ -201,7 +214,6 @@ class QuotexCopyManager:
         return client
 
     async def _connect_any_host(self, ssid, cookies, user_id=None):
-        """يجرّب كل النطاقات. يعيد (client, ssid_extracted, error)."""
         if user_id is not None:
             now = time.time()
             last = self._last_attempt.get(user_id, 0)
@@ -221,10 +233,10 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
+                print(f"  [TRY] {host}...", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
-                    # Try to extract SSID from connected client
                     extracted = ssid
                     if not extracted:
                         try:
@@ -236,21 +248,21 @@ class QuotexCopyManager:
                                     extracted = api.ssid
                         except Exception:
                             pass
-                    print(f"  ✅ connected via {host} (ssid: {'yes' if extracted else 'no'})")
+                    print(f"  ✅ connected via {host} (ssid: {'yes' if extracted else 'no'})", flush=True)
                     if user_id is not None:
                         self._fail_count[user_id] = 0
                     return client, extracted, "OK"
                 last_error = f"{host}: {msg}"
-                print(f"  ❌ {host}: {msg}")
+                print(f"  ❌ {host}: {msg}", flush=True)
                 await self._safe_close(client)
             except asyncio.TimeoutError:
                 last_error = f"{host}: timeout"
-                print(f"  ⏱ {host}: timeout")
+                print(f"  ⏱ {host}: timeout", flush=True)
                 if client:
                     await self._safe_close(client)
             except Exception as e:
                 last_error = f"{host}: {type(e).__name__}: {e}"
-                print(f"  ❌ {host}: {e}")
+                print(f"  ❌ {host}: {type(e).__name__}: {e}", flush=True)
                 if client:
                     await self._safe_close(client)
 
@@ -271,7 +283,7 @@ class QuotexCopyManager:
             await asyncio.sleep(1)
             return True
         except Exception as e:
-            print(f"  switch account failed: {e}")
+            print(f"  switch account failed: {e}", flush=True)
             return False
 
     async def _get_balance(self, client):
@@ -281,7 +293,6 @@ class QuotexCopyManager:
         except Exception:
             return 0.0
 
-    # ─── Session testing ────────────────────────────────────
     async def login_with_credentials(self, email, password):
         for host in HOSTS_TO_TRY:
             client = None
@@ -312,12 +323,11 @@ class QuotexCopyManager:
             except Exception as e:
                 if client:
                     await self._safe_close(client)
-                print(f"login attempt {host} failed: {e}")
+                print(f"login attempt {host} failed: {e}", flush=True)
                 continue
         return {"success": False, "error": "فشل تسجيل الدخول على كل النطاقات"}
 
     async def test_session(self, ssid, cookies=None):
-        """اختبار جلسة. يقبل: ssid فقط، أو cookies فقط، أو كلاهما."""
         client, extracted_ssid, msg = await self._connect_any_host(
             ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20]
         )
@@ -333,7 +343,6 @@ class QuotexCopyManager:
         finally:
             await self._safe_close(client)
 
-    # ─── Master ─────────────────────────────────────────────
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
@@ -350,7 +359,6 @@ class QuotexCopyManager:
         self.master_client = client
         return True, "OK"
 
-    # ─── Stats ──────────────────────────────────────────────
     async def get_user_stats(self, user):
         ssid, cookies = get_session_plain(user)
         if not ssid and not cookies:
@@ -447,7 +455,6 @@ class QuotexCopyManager:
         except Exception:
             pass
 
-    # ─── Trading ────────────────────────────────────────────
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
             return await client.buy(amount=amount, asset=asset, direction=direction,
@@ -462,7 +469,7 @@ class QuotexCopyManager:
             if result[0]:
                 return (True, result[1], asset)
         except Exception as e:
-            print(f"  buy error: {e}")
+            print(f"  buy error: {e}", flush=True)
         if asset.endswith("_otc"):
             alt = asset.replace("_otc", "")
             try:
@@ -614,7 +621,7 @@ class QuotexCopyManager:
             amount = max(1.0, round(balance * (pct / 100.0), 2))
             await self.open_master_trade(asset, direction, amount, expiry, "TIMER")
         except Exception as e:
-            print(f"master signal error: {e}")
+            print(f"master signal error: {e}", flush=True)
 
     async def broadcast_signal(self, asset, direction, expiry=60, lead_sec=60):
         await asyncio.sleep(lead_sec)
