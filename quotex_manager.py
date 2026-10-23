@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import glob
 import json
 import time
@@ -7,100 +8,15 @@ import asyncio
 import threading
 
 # ═══════════════════════════════════════════════════════════════
-# 🔧 PATCH pyquotex: إصلاح الدومين قبل الاستيراد
+# حماية إضافية ضد recursion
 # ═══════════════════════════════════════════════════════════════
-def _patch_pyquotex_domain():
-    """يُصلح الروابط الثابتة داخل pyquotex للعمل مع quotex.com"""
-    patched = []
+sys.setrecursionlimit(10000)
 
-    def fix_url(s):
-        """يحوّل كل qxbroker إلى quotex مع الحفاظ على الرقم (2 أو غيره)"""
-        if 'qxbroker.com' not in s:
-            return s
-        return (
-            s.replace('ws2.qxbroker.com', 'ws2.quotex.com')
-             .replace('ws.qxbroker.com', 'ws.quotex.com')
-             .replace('qxbroker.com', 'quotex.com')
-        )
-
-    # 1) Patch resource module
-    try:
-        from pyquotex import resource as res_mod
-        for attr_name in dir(res_mod):
-            try:
-                obj = getattr(res_mod, attr_name)
-                if isinstance(obj, str) and 'qxbroker.com' in obj:
-                    setattr(res_mod, attr_name, fix_url(obj))
-                    patched.append(f"resource.{attr_name}")
-            except Exception:
-                pass
-        if hasattr(res_mod, 'Resource'):
-            for attr_name in dir(res_mod.Resource):
-                try:
-                    obj = getattr(res_mod.Resource, attr_name)
-                    if isinstance(obj, str) and 'qxbroker.com' in obj:
-                        setattr(res_mod.Resource, attr_name, fix_url(obj))
-                        patched.append(f"Resource.{attr_name}")
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"[PATCH resource] {e}", flush=True)
-
-    # 2) Patch WebSocket client
-    try:
-        import pyquotex.ws.client as ws_mod
-        if hasattr(ws_mod, 'WebsocketClient'):
-            original_init = ws_mod.WebsocketClient.__init__
-            def patched_init(self, *args, **kwargs):
-                original_init(self, *args, **kwargs)
-                for attr in ('url', 'ws_url', 'socket_url', '_url', 'base_url', 'host'):
-                    if hasattr(self, attr):
-                        cur = getattr(self, attr)
-                        if isinstance(cur, str) and 'qxbroker' in cur:
-                            setattr(self, attr, fix_url(cur))
-                            patched.append(f"WSClient.{attr}")
-            ws_mod.WebsocketClient.__init__ = patched_init
-    except Exception as e:
-        print(f"[PATCH ws.client] {e}", flush=True)
-
-    # 3) Patch api module
-    try:
-        import pyquotex.api as api_mod
-        if hasattr(api_mod, 'WebsocketClient'):
-            original_init = api_mod.WebsocketClient.__init__
-            def patched_init2(self, *args, **kwargs):
-                original_init(self, *args, **kwargs)
-                for attr in ('url', 'ws_url', 'socket_url', '_url', 'base_url', 'host'):
-                    if hasattr(self, attr):
-                        cur = getattr(self, attr)
-                        if isinstance(cur, str) and 'qxbroker' in cur:
-                            setattr(self, attr, fix_url(cur))
-                            patched.append(f"API.WSClient.{attr}")
-            api_mod.WebsocketClient.__init__ = patched_init2
-    except Exception as e:
-        print(f"[PATCH api] {e}", flush=True)
-
-    # 4) Patch constants/URLs في أي مكان آخر
-    try:
-        import pyquotex.constants as const_mod
-        for attr_name in dir(const_mod):
-            try:
-                obj = getattr(const_mod, attr_name)
-                if isinstance(obj, str) and 'qxbroker.com' in obj:
-                    setattr(const_mod, attr_name, fix_url(obj))
-                    patched.append(f"constants.{attr_name}")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    if patched:
-        print(f"[PYQUOTEX PATCH] ✅ Patched: {', '.join(sorted(set(patched)))}", flush=True)
-    else:
-        print("[PYQUOTEX PATCH] ⚠️ No patches applied - library may already be updated", flush=True)
-
-
-_patch_pyquotex_domain()
+# ═══════════════════════════════════════════════════════════════
+# ⚠️ لا نستخدم أي patch على __init__ بعد الآن
+# السبب: pyquotex 1.1.0 يستخدم quotex.com أصلاً
+# والـ patch كان يسبب RecursionError
+# ═══════════════════════════════════════════════════════════════
 
 from pyquotex.stable_api import Quotex
 
@@ -114,7 +30,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-CONNECT_TIMEOUT = 25
+CONNECT_TIMEOUT = 30
 STATS_TTL = 120
 
 
@@ -233,7 +149,7 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
-                print(f"  [TRY] {host}...", flush=True)
+                print(f"  [TRY] {host} (ssid={ssid[:15] if ssid else 'none'}...)", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
@@ -260,6 +176,14 @@ class QuotexCopyManager:
                 print(f"  ⏱ {host}: timeout", flush=True)
                 if client:
                     await self._safe_close(client)
+            except RecursionError:
+                last_error = f"{host}: RecursionError (pyquotex bug)"
+                print(f"  ❌ {host}: RecursionError — aborting all retries", flush=True)
+                if client:
+                    await self._safe_close(client)
+                if user_id is not None:
+                    self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
+                return None, None, last_error
             except Exception as e:
                 last_error = f"{host}: {type(e).__name__}: {e}"
                 print(f"  ❌ {host}: {type(e).__name__}: {e}", flush=True)
@@ -290,7 +214,8 @@ class QuotexCopyManager:
         try:
             bal = await client.get_balance()
             return float(bal) if bal else 0.0
-        except Exception:
+        except Exception as e:
+            print(f"  get_balance error: {e}", flush=True)
             return 0.0
 
     async def login_with_credentials(self, email, password):
@@ -320,6 +245,10 @@ class QuotexCopyManager:
                 if client:
                     await self._safe_close(client)
                 continue
+            except RecursionError:
+                if client:
+                    await self._safe_close(client)
+                return {"success": False, "error": "pyquotex RecursionError — login aborted"}
             except Exception as e:
                 if client:
                     await self._safe_close(client)
