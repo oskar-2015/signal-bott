@@ -164,7 +164,7 @@ def api_app_user_info(key):
     user = ensure_user(key)
     return jsonify({
         "ok": True,
-        "linked": bool(user.get("quotex_ssid")),
+        "linked": bool(user.get("quotex_ssid") or user.get("quotex_cookies")),
         "email": user.get("quotex_email") or "",
         "account_type": user.get("account_type") or "demo",
         "trade_mode": user.get("trade_mode") or "percent",
@@ -242,12 +242,11 @@ def api_app_toggle_copy(key):
     user = get_user(key)
     if not user:
         return jsonify({"ok": False, "error": "المستخدم غير موجود"}), 400
-    if not user["quotex_ssid"]:
+    if not user["quotex_ssid"] and not user["quotex_cookies"]:
         return jsonify({"ok": False, "error": "ربط حساب Quotex أولاً"}), 400
 
     user_id = user["id"]
 
-    # إيقاف
     if user["is_copying"]:
         conn = get_db()
         conn.execute(
@@ -260,7 +259,6 @@ def api_app_toggle_copy(key):
         clear_user_cache(user_id)
         return jsonify({"ok": True, "is_copying": False})
 
-    # تفعيل: جلب الرصيد أولاً
     try:
         stats = copy_manager.run_async(copy_manager.get_user_stats(user), timeout=70)
     except Exception as e:
@@ -290,7 +288,7 @@ def api_app_session_stats(key):
     if not ok:
         return jsonify({"ok": False, "error": msg}), 403
     user = get_user(key)
-    if not user or not user["quotex_ssid"]:
+    if not user or (not user["quotex_ssid"] and not user["quotex_cookies"]):
         return jsonify({"ok": False, "error": "غير مرتبط"}), 400
     return jsonify(copy_manager.fetch_stats_sync(user))
 
@@ -310,12 +308,10 @@ def api_app_unlink(key):
 
 @app.route("/api/app/debug_cookies", methods=["POST"])
 def api_app_debug_cookies():
-    """يستقبل قيم من التطبيق ويطبعها في اللوجس للتحليل."""
     data = request.get_json(silent=True) or {}
     print("=" * 70)
     print("🔍 DEBUG FROM APP")
     print("cookies:", data.get("cookies", "")[:500])
-    print("localStorage:", data.get("localStorage", "")[:1000])
     print("=" * 70)
     return jsonify({"ok": True})
 
@@ -352,8 +348,8 @@ def link_session():
     ssid = request.form.get("ssid", "").strip()
     cookies = request.form.get("cookies", "").strip()
     email = request.form.get("email", "").strip()
-    if not ssid:
-        flash("الرجاء لصق SSID", "error")
+    if not ssid and not cookies:
+        flash("الرجاء لصق SSID أو Cookies", "error")
         return redirect(url_for("dashboard"))
     try:
         check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
@@ -369,6 +365,10 @@ def link_session():
 
 @app.route("/api/link", methods=["POST"])
 def api_link():
+    """
+    يستعمله تطبيق الأندرويد لرفع الجلسة بعد الالتقاط.
+    يقبل: ssid فقط، أو cookies فقط، أو كلاهما.
+    """
     data = request.get_json(silent=True) or {}
     key = str(data.get("license_key", "")).strip().upper()
     ssid = str(data.get("ssid", "")).strip()
@@ -378,21 +378,26 @@ def api_link():
     ok, msg = is_key_valid(key)
     if not ok:
         return jsonify({"ok": False, "error": msg}), 403
-    if not ssid:
-        return jsonify({"ok": False, "error": "SSID مفقود"}), 400
+
+    if not ssid and not cookies:
+        return jsonify({"ok": False, "error": "لا توجد جلسة (SSID أو Cookies مطلوبة)"}), 400
 
     ensure_user(key)
 
     try:
-        check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
+        check = copy_manager.run_async(
+            copy_manager.test_session(ssid or "", cookies or None),
+            timeout=90
+        )
     except Exception as e:
         check = {"success": False, "error": str(e) or "انتهت المهلة"}
 
     if not check.get("success"):
         return jsonify({"ok": False, "error": check.get("error", "الجلسة لا تعمل")}), 400
 
-    _store_user_session(key, email, ssid, cookies)
-    return jsonify({"ok": True})
+    final_ssid = check.get("ssid", "") or ssid
+    _store_user_session(key, email, final_ssid, cookies)
+    return jsonify({"ok": True, "ssid_extracted": bool(final_ssid and not ssid)})
 
 
 @app.route("/save_settings", methods=["POST"])
@@ -451,7 +456,7 @@ def unlock_settings():
 def toggle_copy():
     key = session["license_key"]
     user = get_user(key)
-    if user is None or not user["quotex_ssid"]:
+    if user is None or (not user["quotex_ssid"] and not user["quotex_cookies"]):
         flash("ربط الحساب أولاً", "error")
         return redirect(url_for("dashboard"))
     user_id = user["id"]
@@ -503,7 +508,7 @@ def clear_notification():
 @login_required
 def api_session_stats():
     user = get_user(session["license_key"])
-    if not user or not user["quotex_ssid"]:
+    if not user or (not user["quotex_ssid"] and not user["quotex_cookies"]):
         return jsonify({"ok": False, "error": "غير مرتبط"})
     return jsonify(copy_manager.fetch_stats_sync(user))
 
@@ -628,7 +633,7 @@ def admin_set_master():
     password = request.form.get("master_password", "").strip()
     ssid = request.form.get("master_ssid", "").strip()
     cookies = request.form.get("master_cookies", "").strip()
-    if ssid:
+    if ssid or cookies:
         try:
             check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
         except Exception as e:
@@ -643,7 +648,7 @@ def admin_set_master():
         except Exception as e:
             result = {"success": False, "error": str(e) or "انتهت المهلة"}
     else:
-        flash("أدخل البريد وكلمة المرور، أو SSID", "error")
+        flash("أدخل البريد وكلمة المرور، أو SSID/Cookies", "error")
         return redirect(url_for("admin_panel"))
     if result.get("success"):
         set_setting("master_email", email)
