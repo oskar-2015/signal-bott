@@ -6,12 +6,94 @@ import time
 import asyncio
 import threading
 
+# ═══════════════════════════════════════════════════════════════
+# 🔧 PATCH pyquotex: إصلاح الدومين قبل الاستيراد
+# ═══════════════════════════════════════════════════════════════
+def _patch_pyquotex_domain():
+    """يُصلح الروابط الثابتة داخل pyquotex للعمل مع quotex.com"""
+    patched = []
+
+    # 1) Patch resource module (constants)
+    try:
+        from pyquotex import resource as res_mod
+        for attr_name in dir(res_mod):
+            obj = getattr(res_mod, attr_name)
+            if isinstance(obj, str) and 'qxbroker.com' in obj:
+                new_val = obj.replace('ws2.qxbroker.com', 'ws.quotex.com') \
+                             .replace('ws.qxbroker.com', 'ws.quotex.com') \
+                             .replace('qxbroker.com', 'quotex.com')
+                setattr(res_mod, attr_name, new_val)
+                patched.append(f"resource.{attr_name}")
+        if hasattr(res_mod, 'Resource'):
+            for attr_name in dir(res_mod.Resource):
+                obj = getattr(res_mod.Resource, attr_name)
+                if isinstance(obj, str) and 'qxbroker.com' in obj:
+                    new_val = obj.replace('ws2.qxbroker.com', 'ws.quotex.com') \
+                                 .replace('ws.qxbroker.com', 'ws.quotex.com') \
+                                 .replace('qxbroker.com', 'quotex.com')
+                    setattr(res_mod.Resource, attr_name, new_val)
+                    patched.append(f"Resource.{attr_name}")
+    except Exception as e:
+        print(f"[PATCH resource] {e}")
+
+    # 2) Patch WebSocket client - intercept __init__ to fix url
+    try:
+        import pyquotex.ws.client as ws_mod
+        if hasattr(ws_mod, 'WebsocketClient'):
+            original_init = ws_mod.WebsocketClient.__init__
+            def patched_init(self, *args, **kwargs):
+                original_init(self, *args, **kwargs)
+                # Fix any qxbroker URL to quotex
+                for attr in ('url', 'ws_url', 'socket_url', '_url'):
+                    if hasattr(self, attr):
+                        cur = getattr(self, attr)
+                        if isinstance(cur, str) and 'qxbroker' in cur:
+                            new = cur.replace('ws2.qxbroker.com', 'ws.quotex.com') \
+                                     .replace('ws.qxbroker.com', 'ws.quotex.com') \
+                                     .replace('qxbroker.com', 'quotex.com')
+                            setattr(self, attr, new)
+                            patched.append(f"WSClient.{attr}")
+            ws_mod.WebsocketClient.__init__ = patched_init
+    except Exception as e:
+        print(f"[PATCH ws.client] {e}")
+
+    # 3) Patch api module - base URLs
+    try:
+        import pyquotex.api as api_mod
+        if hasattr(api_mod, 'WebsocketClient'):
+            original_init = api_mod.WebsocketClient.__init__
+            def patched_init2(self, *args, **kwargs):
+                original_init(self, *args, **kwargs)
+                for attr in ('url', 'ws_url', 'socket_url', '_url'):
+                    if hasattr(self, attr):
+                        cur = getattr(self, attr)
+                        if isinstance(cur, str) and 'qxbroker' in cur:
+                            new = cur.replace('ws2.qxbroker.com', 'ws.quotex.com') \
+                                     .replace('ws.qxbroker.com', 'ws.quotex.com') \
+                                     .replace('qxbroker.com', 'quotex.com')
+                            setattr(self, attr, new)
+                            patched.append(f"API.WSClient.{attr}")
+            api_mod.WebsocketClient.__init__ = patched_init2
+    except Exception as e:
+        print(f"[PATCH api] {e}")
+
+    if patched:
+        print(f"[PYQUOTEX PATCH] ✅ Patched: {', '.join(set(patched))}")
+    else:
+        print("[PYQUOTEX PATCH] ⚠️ No patches applied - library may already be updated")
+
+
+_patch_pyquotex_domain()
+
+# Now import normally
 from pyquotex.stable_api import Quotex
+
 from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-HOSTS_TO_TRY = ["quotex.com", "qxbroker.com", "quotex.io"]
+# ─── Configuration ───────────────────────────────────────────
+HOSTS_TO_TRY = ["quotex.com", "quotex.io", "qxbroker.com"]
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -51,6 +133,7 @@ class QuotexCopyManager:
         self._last_attempt = {}
         self._fail_count = {}
 
+    # ─── Background loop ────────────────────────────────────
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
             return
@@ -80,6 +163,7 @@ class QuotexCopyManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    # ─── Cache ──────────────────────────────────────────────
     def get_cached_stats(self, user_id):
         item = self._stats_cache.get(user_id)
         if not item:
@@ -105,16 +189,19 @@ class QuotexCopyManager:
         self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 120)
         return stats
 
+    # ─── Client creation ────────────────────────────────────
     def _make_client(self, ssid, cookies, host):
         client = Quotex(email="", password="", lang="en", host=host)
-        args = {"user_agent": USER_AGENT, "ssid": ssid}
+        args = {"user_agent": USER_AGENT}
+        if ssid:
+            args["ssid"] = ssid
         if cookies:
             args["cookies"] = cookies
         client.set_session(**args)
         return client
 
     async def _connect_any_host(self, ssid, cookies, user_id=None):
-        """يجرّب كل النطاقات المحتملة ويعيد أول نجاح."""
+        """يجرّب كل النطاقات. يعيد (client, ssid_extracted, error)."""
         if user_id is not None:
             now = time.time()
             last = self._last_attempt.get(user_id, 0)
@@ -127,7 +214,7 @@ class QuotexCopyManager:
                 cooldown = 0
             if now - last < cooldown:
                 wait = int(cooldown - (now - last))
-                return None, f"cooldown ({wait}s after {fails} failures)"
+                return None, None, f"cooldown ({wait}s after {fails} failures)"
             self._last_attempt[user_id] = now
 
         last_error = "unknown"
@@ -137,10 +224,22 @@ class QuotexCopyManager:
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
-                    print(f"  ✅ connected via {host}")
+                    # Try to extract SSID from connected client
+                    extracted = ssid
+                    if not extracted:
+                        try:
+                            if hasattr(client, 'session_data') and isinstance(client.session_data, dict):
+                                extracted = client.session_data.get('token', '') or client.session_data.get('ssid', '')
+                            if not extracted:
+                                api = getattr(client, 'api', None)
+                                if api and hasattr(api, 'ssid'):
+                                    extracted = api.ssid
+                        except Exception:
+                            pass
+                    print(f"  ✅ connected via {host} (ssid: {'yes' if extracted else 'no'})")
                     if user_id is not None:
                         self._fail_count[user_id] = 0
-                    return client, "OK"
+                    return client, extracted, "OK"
                 last_error = f"{host}: {msg}"
                 print(f"  ❌ {host}: {msg}")
                 await self._safe_close(client)
@@ -157,7 +256,7 @@ class QuotexCopyManager:
 
         if user_id is not None:
             self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
-        return None, last_error
+        return None, None, last_error
 
     async def _safe_close(self, client):
         try:
@@ -182,24 +281,7 @@ class QuotexCopyManager:
         except Exception:
             return 0.0
 
-    @staticmethod
-    def _extract_session(client, email):
-        api = getattr(client, "api", None)
-        cookies = None
-        ssid = None
-        for holder in (client, api):
-            sd = getattr(holder, "session_data", None)
-            if isinstance(sd, dict):
-                cookies = cookies or sd.get("cookies")
-                ssid = ssid or sd.get("token") or sd.get("ssid")
-        if not ssid:
-            ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
-        if not ssid or not cookies:
-            fc, fs = _read_session_file(email)
-            cookies = cookies or fc
-            ssid = ssid or fs
-        return ssid, cookies
-
+    # ─── Session testing ────────────────────────────────────
     async def login_with_credentials(self, email, password):
         for host in HOSTS_TO_TRY:
             client = None
@@ -209,12 +291,20 @@ class QuotexCopyManager:
                 if not check:
                     await self._safe_close(client)
                     continue
-                ssid, cookies = self._extract_session(client, email)
+                ssid = None
+                cookies = None
+                api = getattr(client, "api", None)
+                for holder in (client, api):
+                    sd = getattr(holder, "session_data", None)
+                    if isinstance(sd, dict):
+                        cookies = cookies or sd.get("cookies")
+                        ssid = ssid or sd.get("token") or sd.get("ssid")
                 if not ssid:
-                    await self._safe_close(client)
-                    return {"success": False, "error": "قراءة الجلسة فشلت"}
+                    ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
                 await self._safe_close(client)
-                return {"success": True, "ssid": ssid, "cookies": cookies or ""}
+                if ssid:
+                    return {"success": True, "ssid": ssid, "cookies": cookies or ""}
+                return {"success": False, "error": "تم الدخول لكن لم نستطع قراءة SSID"}
             except asyncio.TimeoutError:
                 if client:
                     await self._safe_close(client)
@@ -227,24 +317,32 @@ class QuotexCopyManager:
         return {"success": False, "error": "فشل تسجيل الدخول على كل النطاقات"}
 
     async def test_session(self, ssid, cookies=None):
-        client, msg = await self._connect_any_host(ssid, cookies, user_id="test_" + ssid[:20])
+        """اختبار جلسة. يقبل: ssid فقط، أو cookies فقط، أو كلاهما."""
+        client, extracted_ssid, msg = await self._connect_any_host(
+            ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20]
+        )
         if client is None:
             return {"success": False, "error": msg}
         try:
             balance = await self._get_balance(client)
-            return {"success": True, "balance": balance}
+            return {
+                "success": True,
+                "balance": balance,
+                "ssid": extracted_ssid or ssid or "",
+            }
         finally:
             await self._safe_close(client)
 
+    # ─── Master ─────────────────────────────────────────────
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
-        if not ssid:
+        if not ssid and not cookies:
             return False, "لم يُربط حساب المشرف"
         if self.master_client:
             await self._safe_close(self.master_client)
             self.master_client = None
-        client, msg = await self._connect_any_host(ssid, cookies, user_id="master")
+        client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id="master")
         if client is None:
             return False, msg
         acct = get_setting("master_account_type", "demo")
@@ -252,11 +350,12 @@ class QuotexCopyManager:
         self.master_client = client
         return True, "OK"
 
+    # ─── Stats ──────────────────────────────────────────────
     async def get_user_stats(self, user):
         ssid, cookies = get_session_plain(user)
-        if not ssid:
+        if not ssid and not cookies:
             return {"ok": False, "error": "لا توجد جلسة"}
-        client, msg = await self._connect_any_host(ssid, cookies, user_id=user.get("id"))
+        client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user.get("id"))
         if client is None:
             return {"ok": False, "error": f"فشل الاتصال: {msg}"}
         try:
@@ -348,6 +447,7 @@ class QuotexCopyManager:
         except Exception:
             pass
 
+    # ─── Trading ────────────────────────────────────────────
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
             return await client.buy(amount=amount, asset=asset, direction=direction,
@@ -390,7 +490,7 @@ class QuotexCopyManager:
 
     async def copy_to_follower(self, follower, asset, direction, expiry, time_mode):
         ssid, cookies = get_session_plain(follower)
-        if not ssid:
+        if not ssid and not cookies:
             return {"success": False, "error": "لا توجد جلسة"}
         user_id = follower["id"]
         account_type = follower.get("account_type", "demo")
@@ -405,7 +505,7 @@ class QuotexCopyManager:
             except Exception:
                 pass
 
-        client, msg = await self._connect_any_host(ssid, cookies, user_id=user_id)
+        client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user_id)
         if client is None:
             return {"success": False, "error": f"فشل الاتصال: {msg}"}
         try:
