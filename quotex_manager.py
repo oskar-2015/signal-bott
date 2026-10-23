@@ -48,6 +48,11 @@ class QuotexCopyManager:
         self._ready = threading.Event()
         self._stats_cache = {}
         self._tasks = set()
+        # 🆕 تبريد الاتصالات: منع المحاولات المتكررة السريعة
+        self._last_attempt = {}
+        self._fail_count = {}
+
+    # ---------- الحلقة الخلفية ----------
 
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
@@ -80,6 +85,8 @@ class QuotexCopyManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    # ---------- كاش الإحصائيات ----------
+
     def get_cached_stats(self, user_id):
         item = self._stats_cache.get(user_id)
         if not item:
@@ -102,8 +109,10 @@ class QuotexCopyManager:
             stats = self.run_async(self.get_user_stats(user), timeout=70)
         except Exception as e:
             stats = {"ok": False, "error": str(e) or "انتهت المهلة"}
-        self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 30)
+        self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 60)
         return stats
+
+    # ---------- أدوات الاتصال ----------
 
     def _make_client(self, ssid, cookies=None):
         client = Quotex(email="", password="", lang="en", host=QX_HOST)
@@ -113,8 +122,43 @@ class QuotexCopyManager:
         client.set_session(**session_args)
         return client
 
-    async def _connect(self, client):
-        return await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+    async def _connect(self, client, user_id=None):
+        """
+        محاولة اتصال مع تبريد:
+        - إذا فشل الاتصال لنفس المستخدم خلال آخر 60 ثانية → لا نحاول مجدداً
+        - إذا فشل 3 مرات متتالية → ننتظر 5 دقائق
+        - بعد النجاح → نعيد تصفير عداد الفشل
+        """
+        if user_id is not None:
+            now = time.time()
+            last = self._last_attempt.get(user_id, 0)
+            fails = self._fail_count.get(user_id, 0)
+
+            if fails >= 3:
+                cooldown = 300  # 5 دقائق بعد 3 فشل
+            elif fails >= 1:
+                cooldown = 60   # 60 ثانية بعد فشل واحد
+            else:
+                cooldown = 0
+
+            if now - last < cooldown:
+                wait = int(cooldown - (now - last))
+                return False, f"cooldown ({wait}s remaining after {fails} failures)"
+
+            self._last_attempt[user_id] = now
+
+        try:
+            result = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+            if user_id is not None:
+                if result and result[0]:
+                    self._fail_count[user_id] = 0
+                else:
+                    self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
+            return result
+        except Exception:
+            if user_id is not None:
+                self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
+            raise
 
     async def _safe_close(self, client):
         try:
@@ -138,6 +182,8 @@ class QuotexCopyManager:
             return float(bal) if bal else 0.0
         except Exception:
             return 0.0
+
+    # ---------- ربط الحسابات ----------
 
     @staticmethod
     def _extract_session(client, email):
@@ -181,10 +227,12 @@ class QuotexCopyManager:
         client = None
         try:
             client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client)
+            check, msg = await self._connect(client, user_id="test_" + ssid[:20])
             if not check:
                 return {"success": False, "error": f"فشل الاتصال: {msg}"}
             balance = await self._get_balance(client)
+            # بعد نجاح الاختبار، صفّر العداد لهذه الجلسة
+            self._fail_count["test_" + ssid[:20]] = 0
             return {"success": True, "balance": balance}
         except asyncio.TimeoutError:
             return {"success": False, "error": "انتهت المهلة أثناء الاتصال"}
@@ -193,6 +241,8 @@ class QuotexCopyManager:
         finally:
             if client:
                 await self._safe_close(client)
+
+    # ---------- حساب المشرف ----------
 
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
@@ -206,7 +256,7 @@ class QuotexCopyManager:
 
         try:
             client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client)
+            check, msg = await self._connect(client, user_id="master")
             if check:
                 acct = get_setting("master_account_type", "demo")
                 await self._switch_account(client, acct)
@@ -216,6 +266,8 @@ class QuotexCopyManager:
         except Exception as e:
             return False, str(e)
 
+    # ---------- الإحصائيات وحدود الربح/الخسارة ----------
+
     async def get_user_stats(self, user):
         ssid, cookies = get_session_plain(user)
         if not ssid:
@@ -224,7 +276,7 @@ class QuotexCopyManager:
         client = None
         try:
             client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client)
+            check, msg = await self._connect(client, user_id=user.get("id"))
             if not check:
                 return {"ok": False, "error": f"فشل الاتصال: {msg}"}
             await self._switch_account(client, user.get("account_type", "demo"))
@@ -330,6 +382,8 @@ class QuotexCopyManager:
         except Exception as e:
             print(f"_refresh_after_trade error: {e}")
 
+    # ---------- تنفيذ الصفقات ----------
+
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
             return await client.buy(
@@ -405,7 +459,7 @@ class QuotexCopyManager:
 
         try:
             client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client)
+            check, msg = await self._connect(client, user_id=user_id)
             if not check:
                 return {"success": False, "error": f"فشل الاتصال: {msg}"}
 
