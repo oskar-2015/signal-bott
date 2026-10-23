@@ -48,7 +48,6 @@ def login_required(f):
             if wants_json:
                 return jsonify({"ok": False, "error": "unauthorized"}), 401
             return redirect(url_for("index"))
-
         ok, msg = is_key_valid(key)
         if not ok:
             session.clear()
@@ -56,7 +55,6 @@ def login_required(f):
                 return jsonify({"ok": False, "error": msg}), 401
             flash(msg, "error")
             return redirect(url_for("index"))
-
         return f(*args, **kwargs)
     return decorated
 
@@ -106,16 +104,13 @@ def index():
 def activate():
     key = request.form.get("license_key", "").strip().upper()
     device_id = request.cookies.get(DEVICE_COOKIE) or secrets.token_hex(16)
-
     result = validate_key(key, device_id=device_id)
     if not result["success"]:
         flash(result["error"], "error")
         return redirect(url_for("index"))
-
     session["license_key"] = key
     session.permanent = True
     ensure_user(key)
-
     resp = make_response(redirect(url_for("dashboard")))
     resp.set_cookie(
         DEVICE_COOKIE, device_id, max_age=60 * 60 * 24 * 365 * 2,
@@ -135,7 +130,6 @@ def dashboard():
 
 @app.route("/app_login/<key>")
 def app_login(key):
-    """يستخدمه تطبيق الأندرويد للدخول التلقائي بلوحة التحكم بعد التحقق من المفتاح."""
     key = key.strip().upper()
     ok, msg = is_key_valid(key)
     if not ok:
@@ -144,11 +138,8 @@ def app_login(key):
         <meta name="viewport" content="width=device-width,initial-scale=1">
         <style>body{{background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center;}}
         h2{{color:#d4af37;}}</style></head><body>
-        <h2>⚠️ خطأ</h2><p>{msg}</p>
-        <p>أعد تشغيل التطبيق وأدخل مفتاحاً صحيحاً.</p>
-        </body></html>
+        <h2>⚠️ خطأ</h2><p>{msg}</p></body></html>
         """, 403
-
     session["license_key"] = key
     session.permanent = True
     ensure_user(key)
@@ -162,29 +153,195 @@ def _store_user_session(key, email, ssid, cookies):
         clear_user_cache(user["id"])
 
 
+# ==================== API للتطبيق (JSON) ====================
+
+@app.route("/api/app/user_info/<key>")
+def api_app_user_info(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    user = ensure_user(key)
+    return jsonify({
+        "ok": True,
+        "linked": bool(user.get("quotex_ssid")),
+        "email": user.get("quotex_email") or "",
+        "account_type": user.get("account_type") or "demo",
+        "trade_mode": user.get("trade_mode") or "percent",
+        "trade_value": float(user.get("trade_value") or 1.0),
+        "max_loss_value": float(user.get("max_loss_value") or 0),
+        "max_profit_value": float(user.get("max_profit_value") or 0),
+        "is_copying": bool(user.get("is_copying")),
+        "settings_locked": bool(user.get("settings_locked")),
+        "start_balance": user.get("start_balance"),
+    })
+
+
+@app.route("/api/app/save_settings/<key>", methods=["POST"])
+def api_app_save_settings(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        account_type = data.get("account_type", "demo")
+        trade_mode = data.get("trade_mode", "percent")
+        trade_value = float(data.get("trade_value", 1.0))
+        max_loss_value = float(data.get("max_loss_value", 0))
+        max_profit_value = float(data.get("max_profit_value", 0))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "قيم غير صحيحة"}), 400
+
+    if account_type not in ("demo", "live"):
+        account_type = "demo"
+    if trade_mode not in ("percent", "fixed"):
+        trade_mode = "percent"
+    if trade_mode == "percent":
+        if trade_value < 0.1 or trade_value > 100:
+            return jsonify({"ok": False, "error": "النسبة بين 0.1 و 100"}), 400
+    elif trade_value < 1:
+        return jsonify({"ok": False, "error": "المبلغ الثابت 1$ على الأقل"}), 400
+    if max_loss_value < 0 or max_profit_value < 0:
+        return jsonify({"ok": False, "error": "القيم يجب أن تكون موجبة"}), 400
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE users SET account_type = ?, trade_mode = ?, trade_value = ?, "
+        "max_loss_value = ?, max_profit_value = ?, settings_locked = 1 "
+        "WHERE license_key = ?",
+        (account_type, trade_mode, trade_value, max_loss_value, max_profit_value, key),
+    )
+    conn.commit()
+    conn.close()
+    user = get_user(key)
+    if user:
+        clear_user_cache(user["id"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/app/unlock_settings/<key>", methods=["POST"])
+def api_app_unlock_settings(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    conn = get_db()
+    conn.execute("UPDATE users SET settings_locked = 0 WHERE license_key = ?", (key,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/app/toggle_copy/<key>", methods=["POST"])
+def api_app_toggle_copy(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    user = get_user(key)
+    if not user:
+        return jsonify({"ok": False, "error": "المستخدم غير موجود"}), 400
+    if not user["quotex_ssid"]:
+        return jsonify({"ok": False, "error": "ربط حساب Quotex أولاً"}), 400
+
+    user_id = user["id"]
+
+    # إيقاف
+    if user["is_copying"]:
+        conn = get_db()
+        conn.execute(
+            "UPDATE users SET is_copying = 0, start_balance = NULL, last_notification = NULL, "
+            "balance_version = balance_version + 1 WHERE license_key = ?",
+            (key,),
+        )
+        conn.commit()
+        conn.close()
+        clear_user_cache(user_id)
+        return jsonify({"ok": True, "is_copying": False})
+
+    # تفعيل: جلب الرصيد أولاً
+    try:
+        stats = copy_manager.run_async(copy_manager.get_user_stats(user), timeout=70)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"تعذر جلب الرصيد: {e}"}), 400
+
+    if not (stats.get("ok") and stats["balance"] > 0):
+        err = stats.get("error") or "رصيد حسابك صفر"
+        return jsonify({"ok": False, "error": err}), 400
+
+    new_start = stats["balance"]
+    conn = get_db()
+    conn.execute(
+        "UPDATE users SET is_copying = 1, start_balance = ?, last_notification = NULL, "
+        "balance_version = balance_version + 1 WHERE license_key = ?",
+        (new_start, key),
+    )
+    conn.commit()
+    conn.close()
+    clear_user_cache(user_id)
+    return jsonify({"ok": True, "is_copying": True, "start_balance": new_start})
+
+
+@app.route("/api/app/session_stats/<key>")
+def api_app_session_stats(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    user = get_user(key)
+    if not user or not user["quotex_ssid"]:
+        return jsonify({"ok": False, "error": "غير مرتبط"}), 400
+    return jsonify(copy_manager.fetch_stats_sync(user))
+
+
+@app.route("/api/app/unlink/<key>", methods=["POST"])
+def api_app_unlink(key):
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 403
+    user = get_user(key)
+    clear_user_session(key)
+    if user:
+        clear_user_cache(user["id"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/app/debug_cookies", methods=["POST"])
+def api_app_debug_cookies():
+    """يستقبل قيم من التطبيق ويطبعها في اللوجس للتحليل."""
+    data = request.get_json(silent=True) or {}
+    print("=" * 70)
+    print("🔍 DEBUG FROM APP")
+    print("cookies:", data.get("cookies", "")[:500])
+    print("localStorage:", data.get("localStorage", "")[:1000])
+    print("=" * 70)
+    return jsonify({"ok": True})
+
+
+# ==================== نقاط النهاية القديمة (للويب) ====================
+
 @app.route("/auto_login", methods=["POST"])
 @login_required
 def auto_login():
     email = request.form.get("email", "").strip()
     password = request.form.get("password", "").strip()
     key = session["license_key"]
-
     if not email or not password:
-        flash("الرجاء إدخال البريد الإلكتروني وكلمة المرور", "error")
+        flash("الرجاء إدخال البريد وكلمة المرور", "error")
         return redirect(url_for("dashboard"))
-
     try:
         result = copy_manager.run_async(
             copy_manager.login_with_credentials(email, password), timeout=90
         )
     except Exception as e:
         result = {"success": False, "error": str(e) or "انتهت المهلة"}
-
     if result.get("success"):
         _store_user_session(key, email, result["ssid"], result.get("cookies", ""))
         flash("✅ تم ربط الحساب بنجاح", "success")
     else:
-        flash(f"❌ فشل الربط: {result.get('error', 'خطأ غير معروف')}", "error")
+        flash(f"❌ فشل الربط: {result.get('error', 'خطأ')}", "error")
     return redirect(url_for("dashboard"))
 
 
@@ -195,27 +352,23 @@ def link_session():
     ssid = request.form.get("ssid", "").strip()
     cookies = request.form.get("cookies", "").strip()
     email = request.form.get("email", "").strip()
-
     if not ssid:
-        flash("الرجاء لصق قيمة SSID", "error")
+        flash("الرجاء لصق SSID", "error")
         return redirect(url_for("dashboard"))
-
     try:
         check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
     except Exception as e:
         check = {"success": False, "error": str(e) or "انتهت المهلة"}
-
     if check.get("success"):
         _store_user_session(key, email, ssid, cookies)
         flash("✅ تم ربط الحساب بنجاح", "success")
     else:
-        flash(f"❌ الجلسة لا تعمل: {check.get('error', 'خطأ غير معروف')}", "error")
+        flash(f"❌ الجلسة لا تعمل: {check.get('error', 'خطأ')}", "error")
     return redirect(url_for("dashboard"))
 
 
 @app.route("/api/link", methods=["POST"])
 def api_link():
-    """يستعمله تطبيق الأندرويد لرفع الجلسة بعد الالتقاط."""
     data = request.get_json(silent=True) or {}
     key = str(data.get("license_key", "")).strip().upper()
     ssid = str(data.get("ssid", "")).strip()
@@ -253,39 +406,31 @@ def save_settings():
         max_loss_value = float(request.form.get("max_loss_value", 0))
         max_profit_value = float(request.form.get("max_profit_value", 0))
     except ValueError:
-        flash("الرجاء إدخال أرقام صحيحة", "error")
+        flash("أرقام غير صحيحة", "error")
         return redirect(url_for("dashboard"))
-
     if account_type not in ("demo", "live"):
         account_type = "demo"
     if trade_mode not in ("percent", "fixed"):
         trade_mode = "percent"
-
     if trade_mode == "percent":
         if trade_value < 0.1 or trade_value > 100:
-            flash("النسبة يجب أن تكون بين 0.1 و 100", "error")
+            flash("النسبة بين 0.1 و 100", "error")
             return redirect(url_for("dashboard"))
     elif trade_value < 1:
-        flash("المبلغ الثابت يجب أن يكون 1$ على الأقل", "error")
+        flash("المبلغ الثابت 1$ على الأقل", "error")
         return redirect(url_for("dashboard"))
-
-    if max_loss_value < 0 or max_profit_value < 0:
-        flash("حدود الربح والخسارة لا يمكن أن تكون سالبة", "error")
-        return redirect(url_for("dashboard"))
-
     user = get_user(key)
     conn = get_db()
     conn.execute(
         "UPDATE users SET account_type = ?, trade_mode = ?, trade_value = ?, "
-        "max_loss_value = ?, max_profit_value = ?, settings_locked = 1 "
-        "WHERE license_key = ?",
+        "max_loss_value = ?, max_profit_value = ?, settings_locked = 1 WHERE license_key = ?",
         (account_type, trade_mode, trade_value, max_loss_value, max_profit_value, key),
     )
     conn.commit()
     conn.close()
     if user:
         clear_user_cache(user["id"])
-    flash("✅ تم حفظ الإعدادات وقفلها", "success")
+    flash("✅ تم حفظ الإعدادات", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -297,7 +442,7 @@ def unlock_settings():
     conn.execute("UPDATE users SET settings_locked = 0 WHERE license_key = ?", (key,))
     conn.commit()
     conn.close()
-    flash("🔓 تم فتح الإعدادات للتعديل", "success")
+    flash("🔓 فُتحت الإعدادات", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -306,52 +451,33 @@ def unlock_settings():
 def toggle_copy():
     key = session["license_key"]
     user = get_user(key)
-
-    if user is None:
-        flash("خطأ: المستخدم غير موجود", "error")
+    if user is None or not user["quotex_ssid"]:
+        flash("ربط الحساب أولاً", "error")
         return redirect(url_for("dashboard"))
-
-    if not user["quotex_ssid"]:
-        flash("الرجاء ربط حساب Quotex أولاً عبر تطبيق Oscar Linker", "error")
-        return redirect(url_for("dashboard"))
-
     user_id = user["id"]
-
     if user["is_copying"]:
         conn = get_db()
         conn.execute(
             "UPDATE users SET is_copying = 0, start_balance = NULL, last_notification = NULL, "
-            "balance_version = balance_version + 1 WHERE license_key = ?",
-            (key,),
-        )
+            "balance_version = balance_version + 1 WHERE license_key = ?", (key,))
         conn.commit()
         conn.close()
         clear_user_cache(user_id)
         flash("⛔ تم إيقاف النسخ", "success")
         return redirect(url_for("dashboard"))
-
     try:
         stats = copy_manager.run_async(copy_manager.get_user_stats(user), timeout=70)
     except Exception as e:
-        print(f"balance fetch failed on enable: {e}")
-        flash("⚠️ لا يمكن تفعيل النسخ: تعذّر جلب الرصيد", "error")
+        flash(f"تعذر جلب الرصيد: {e}", "error")
         return redirect(url_for("dashboard"))
-
     if not (stats.get("ok") and stats["balance"] > 0):
-        if stats.get("ok"):
-            kind = "الحقيقي" if user["account_type"] == "live" else "التجريبي"
-            flash(f"⚠️ لا يمكن تفعيل النسخ: رصيد حسابك {kind} صفر", "error")
-        else:
-            flash(f"⚠️ لا يمكن تفعيل النسخ: {stats.get('error', 'تعذّر جلب الرصيد')}", "error")
+        flash("لا يمكن تفعيل النسخ: رصيد صفر أو خطأ", "error")
         return redirect(url_for("dashboard"))
-
     new_start = stats["balance"]
     conn = get_db()
     conn.execute(
         "UPDATE users SET is_copying = 1, start_balance = ?, last_notification = NULL, "
-        "balance_version = balance_version + 1 WHERE license_key = ?",
-        (new_start, key),
-    )
+        "balance_version = balance_version + 1 WHERE license_key = ?", (new_start, key))
     conn.commit()
     conn.close()
     clear_user_cache(user_id)
@@ -411,7 +537,6 @@ def admin():
             session.permanent = True
             return redirect(url_for("admin_panel"))
         flash("كلمة المرور غير صحيحة", "error")
-
     if session.get("is_admin"):
         return redirect(url_for("admin_panel"))
     return render_template("admin_login.html")
@@ -429,7 +554,6 @@ def admin_panel():
     ).fetchall()
     logs = conn.execute("SELECT * FROM trade_logs ORDER BY created_at DESC LIMIT 20").fetchall()
     conn.close()
-
     return render_template(
         "admin.html",
         licenses=get_all_licenses(),
@@ -472,7 +596,7 @@ def admin_delete_key():
     delete_key(key)
     if user:
         clear_user_cache(user["id"])
-    flash("تم حذف المفتاح وكل بيانات المستخدم نهائياً", "success")
+    flash("تم الحذف", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -482,10 +606,10 @@ def admin_toggle_key():
     key = request.form.get("key", "")
     if request.form.get("action") == "activate":
         reactivate_key(key)
-        flash("تم تفعيل المفتاح", "success")
+        flash("تم التفعيل", "success")
     else:
         deactivate_key(key)
-        flash("تم إيقاف المفتاح مؤقتاً (بيانات المستخدم محفوظة)", "success")
+        flash("تم الإيقاف المؤقت", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -493,7 +617,7 @@ def admin_toggle_key():
 @admin_required
 def admin_reset_device():
     reset_device(request.form.get("key", ""))
-    flash("تم إعادة تعيين الجهاز، يستطيع المستخدم الدخول من جهاز جديد", "success")
+    flash("تم إعادة تعيين الجهاز", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -504,7 +628,6 @@ def admin_set_master():
     password = request.form.get("master_password", "").strip()
     ssid = request.form.get("master_ssid", "").strip()
     cookies = request.form.get("master_cookies", "").strip()
-
     if ssid:
         try:
             check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
@@ -516,22 +639,19 @@ def admin_set_master():
         result = {"success": True, "ssid": ssid, "cookies": cookies}
     elif email and password:
         try:
-            result = copy_manager.run_async(
-                copy_manager.login_with_credentials(email, password), timeout=90
-            )
+            result = copy_manager.run_async(copy_manager.login_with_credentials(email, password), timeout=90)
         except Exception as e:
             result = {"success": False, "error": str(e) or "انتهت المهلة"}
     else:
-        flash("أدخل البريد وكلمة المرور، أو الصق SSID", "error")
+        flash("أدخل البريد وكلمة المرور، أو SSID", "error")
         return redirect(url_for("admin_panel"))
-
     if result.get("success"):
         set_setting("master_email", email)
         set_secret_setting("master_ssid", result["ssid"])
         set_secret_setting("master_cookies", result.get("cookies", ""))
-        flash("✅ تم ربط حساب المشرف بنجاح", "success")
+        flash("✅ تم ربط حساب المشرف", "success")
     else:
-        flash(f"❌ فشل الربط: {result.get('error', 'خطأ غير معروف')}", "error")
+        flash(f"❌ فشل: {result.get('error', 'خطأ')}", "error")
     return redirect(url_for("admin_panel"))
 
 
@@ -543,19 +663,16 @@ def admin_save_master_settings():
     except ValueError:
         flash("نسبة غير صحيحة", "error")
         return redirect(url_for("admin_panel"))
-
     if pct < 0.1 or pct > 100:
-        flash("النسبة يجب أن تكون بين 0.1 و 100", "error")
+        flash("النسبة بين 0.1 و 100", "error")
         return redirect(url_for("admin_panel"))
-
     acct = request.form.get("master_account_type", "demo")
     if acct not in ("demo", "live"):
         acct = "demo"
-
     set_setting("master_percentage", str(pct))
     set_setting("master_account_type", acct)
     set_setting("master_follow_signals", "1" if request.form.get("master_follow") == "on" else "0")
-    flash("✅ تم حفظ الإعدادات", "success")
+    flash("✅ تم الحفظ", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -573,12 +690,10 @@ def admin_open_trade():
     time_mode = request.form.get("time_mode", "TIMER")
     if time_mode not in ("TIMER", "MARGINAL"):
         time_mode = "TIMER"
-
     try:
         master_pct = float(get_setting("master_percentage", "10"))
     except ValueError:
         master_pct = 10.0
-
     try:
         result = copy_manager.run_async(
             copy_manager.broadcast_trade(asset, direction, master_pct, expiry, time_mode),
@@ -586,16 +701,10 @@ def admin_open_trade():
         )
     except Exception as e:
         result = {"success": False, "error": str(e) or "انتهت المهلة"}
-
     if result.get("success"):
-        flash(
-            f"✅ صفقة ${result.get('master_amount', 0):.2f} نُسخت إلى "
-            f"{result.get('copied_count', 0)} متابع من أصل {result.get('total_followers', 0)}. "
-            f"سيُحدَّث الرصيد تلقائياً بعد {expiry} ثانية.",
-            "success",
-        )
+        flash(f"✅ نُسخت إلى {result.get('copied_count', 0)} من {result.get('total_followers', 0)}", "success")
     else:
-        flash(f"❌ فشل: {result.get('error', 'خطأ غير معروف')}", "error")
+        flash(f"❌ {result.get('error', 'خطأ')}", "error")
     return redirect(url_for("admin_panel"))
 
 
