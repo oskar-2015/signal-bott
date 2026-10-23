@@ -161,7 +161,11 @@ async def connect_client():
         cookies=cookies_str,
         ssid=ssid
     )
-    check, reason = await client.connect()
+    try:
+        check, reason = await asyncio.wait_for(client.connect(), timeout=60)
+    except asyncio.TimeoutError:
+        print("connect timeout")
+        return None
     if not check:
         print(f"connect failed: {reason}")
         return None
@@ -199,7 +203,6 @@ async def get_closes(client, asset):
         )
     except Exception:
         candles = await client.get_candles(asset, int(time.time()), CANDLE_HISTORY_SECONDS, 60)
-
     return clean_candles(candles)
 
 
@@ -212,13 +215,10 @@ async def pick_best_signal(client, assets):
         except Exception as e:
             print(f"candles error {name}: {e}")
             continue
-
         if strength < MIN_STRENGTH:
             continue
-
         if best is None or strength > best[2]:
             best = (name, payout, strength, direction)
-
     return best
 
 
@@ -230,8 +230,8 @@ async def main_loop():
             if client is None:
                 client = await connect_client()
                 if client is None:
-                    print("connect failed, retrying in 60s")
-                    await asyncio.sleep(60)
+                    print("connect failed, retrying in 5 minutes to avoid rate limit")
+                    await asyncio.sleep(300)
                     continue
 
             cycle += 1
@@ -254,7 +254,6 @@ async def main_loop():
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
             send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
 
-            # نسخ الصفقة لكل المستخدمين الفعّالين عند وقت الدخول المعلن
             trade_dir = "call" if direction == "up" else "put"
             copy_manager.submit(copy_manager.broadcast_signal(
                 asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
@@ -265,15 +264,49 @@ async def main_loop():
             await asyncio.sleep(wait_seconds)
 
         except Exception as e:
-            print(f"main loop error: {e}, reconnecting in 30s")
+            print(f"main loop error: {e}, reconnecting in 5 minutes")
             client = None
-            await asyncio.sleep(30)
+            await asyncio.sleep(300)
 
 
 if __name__ == "__main__":
     copy_manager.start_background_loop()
     keep_alive()
-    try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
-        print("stopped")
+
+    # فحص حالة تفعيل بوت الإشارات
+    signals_enabled = os.environ.get("ENABLE_SIGNALS", "false").lower() == "true"
+
+    if not signals_enabled:
+        print("=" * 70)
+        print("ℹ️  Signal bot is DISABLED (ENABLE_SIGNALS not set to 'true')")
+        print("ℹ️  ✅ Web app + user account connections work normally")
+        print("ℹ️  ✅ Android app linking works normally")
+        print("ℹ️  To enable signals: add ENABLE_SIGNALS=true in Render env vars")
+        print("=" * 70)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            print("stopped")
+    else:
+        # فحص سريع: هل الجلسة موجودة؟
+        _cookies, _ssid = load_session()
+        if not _cookies or not _ssid:
+            print("=" * 70)
+            print("⚠️  Signal bot enabled but qx_session.json is missing or invalid!")
+            print("⚠️  Bot disabled to avoid rate limiting.")
+            print("⚠️  Update qx_session.json and redeploy to enable signals.")
+            print("=" * 70)
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                print("stopped")
+        else:
+            print("=" * 70)
+            print("✅ Signal bot is ENABLED - starting trading loop")
+            print("=" * 70)
+            try:
+                asyncio.run(main_loop())
+            except KeyboardInterrupt:
+                print("stopped")
