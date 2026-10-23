@@ -11,12 +11,12 @@ from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-QX_HOST = os.environ.get("QX_HOST", "quotex.com")
+HOSTS_TO_TRY = ["quotex.com", "qxbroker.com", "quotex.io"]
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-CONNECT_TIMEOUT = 45
+CONNECT_TIMEOUT = 25
 STATS_TTL = 120
 
 
@@ -48,22 +48,17 @@ class QuotexCopyManager:
         self._ready = threading.Event()
         self._stats_cache = {}
         self._tasks = set()
-        # 🆕 تبريد الاتصالات: منع المحاولات المتكررة السريعة
         self._last_attempt = {}
         self._fail_count = {}
-
-    # ---------- الحلقة الخلفية ----------
 
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
             return
-
         def run_loop():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             self._ready.set()
             self._loop.run_forever()
-
         self._thread = threading.Thread(target=run_loop, daemon=True)
         self._thread.start()
         self._ready.wait(timeout=10)
@@ -84,8 +79,6 @@ class QuotexCopyManager:
     def _track(self, task):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-
-    # ---------- كاش الإحصائيات ----------
 
     def get_cached_stats(self, user_id):
         item = self._stats_cache.get(user_id)
@@ -109,56 +102,62 @@ class QuotexCopyManager:
             stats = self.run_async(self.get_user_stats(user), timeout=70)
         except Exception as e:
             stats = {"ok": False, "error": str(e) or "انتهت المهلة"}
-        self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 60)
+        self.set_cached_stats(user["id"], stats, ttl=STATS_TTL if stats.get("ok") else 120)
         return stats
 
-    # ---------- أدوات الاتصال ----------
-
-    def _make_client(self, ssid, cookies=None):
-        client = Quotex(email="", password="", lang="en", host=QX_HOST)
-        session_args = {"user_agent": USER_AGENT, "ssid": ssid}
+    def _make_client(self, ssid, cookies, host):
+        client = Quotex(email="", password="", lang="en", host=host)
+        args = {"user_agent": USER_AGENT, "ssid": ssid}
         if cookies:
-            session_args["cookies"] = cookies
-        client.set_session(**session_args)
+            args["cookies"] = cookies
+        client.set_session(**args)
         return client
 
-    async def _connect(self, client, user_id=None):
-        """
-        محاولة اتصال مع تبريد:
-        - إذا فشل الاتصال لنفس المستخدم خلال آخر 60 ثانية → لا نحاول مجدداً
-        - إذا فشل 3 مرات متتالية → ننتظر 5 دقائق
-        - بعد النجاح → نعيد تصفير عداد الفشل
-        """
+    async def _connect_any_host(self, ssid, cookies, user_id=None):
+        """يجرّب كل النطاقات المحتملة ويعيد أول نجاح."""
         if user_id is not None:
             now = time.time()
             last = self._last_attempt.get(user_id, 0)
             fails = self._fail_count.get(user_id, 0)
-
             if fails >= 3:
-                cooldown = 300  # 5 دقائق بعد 3 فشل
+                cooldown = 300
             elif fails >= 1:
-                cooldown = 60   # 60 ثانية بعد فشل واحد
+                cooldown = 60
             else:
                 cooldown = 0
-
             if now - last < cooldown:
                 wait = int(cooldown - (now - last))
-                return False, f"cooldown ({wait}s remaining after {fails} failures)"
-
+                return None, f"cooldown ({wait}s after {fails} failures)"
             self._last_attempt[user_id] = now
 
-        try:
-            result = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
-            if user_id is not None:
-                if result and result[0]:
-                    self._fail_count[user_id] = 0
-                else:
-                    self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
-            return result
-        except Exception:
-            if user_id is not None:
-                self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
-            raise
+        last_error = "unknown"
+        for host in HOSTS_TO_TRY:
+            client = None
+            try:
+                client = self._make_client(ssid, cookies, host)
+                check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+                if check:
+                    print(f"  ✅ connected via {host}")
+                    if user_id is not None:
+                        self._fail_count[user_id] = 0
+                    return client, "OK"
+                last_error = f"{host}: {msg}"
+                print(f"  ❌ {host}: {msg}")
+                await self._safe_close(client)
+            except asyncio.TimeoutError:
+                last_error = f"{host}: timeout"
+                print(f"  ⏱ {host}: timeout")
+                if client:
+                    await self._safe_close(client)
+            except Exception as e:
+                last_error = f"{host}: {type(e).__name__}: {e}"
+                print(f"  ❌ {host}: {e}")
+                if client:
+                    await self._safe_close(client)
+
+        if user_id is not None:
+            self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
+        return None, last_error
 
     async def _safe_close(self, client):
         try:
@@ -173,7 +172,7 @@ class QuotexCopyManager:
             await asyncio.sleep(1)
             return True
         except Exception as e:
-            print(f"  switch account failed ({account_type}): {e}")
+            print(f"  switch account failed: {e}")
             return False
 
     async def _get_balance(self, client):
@@ -182,8 +181,6 @@ class QuotexCopyManager:
             return float(bal) if bal else 0.0
         except Exception:
             return 0.0
-
-    # ---------- ربط الحسابات ----------
 
     @staticmethod
     def _extract_session(client, email):
@@ -198,108 +195,84 @@ class QuotexCopyManager:
         if not ssid:
             ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
         if not ssid or not cookies:
-            file_cookies, file_ssid = _read_session_file(email)
-            cookies = cookies or file_cookies
-            ssid = ssid or file_ssid
+            fc, fs = _read_session_file(email)
+            cookies = cookies or fc
+            ssid = ssid or fs
         return ssid, cookies
 
     async def login_with_credentials(self, email, password):
-        client = Quotex(email=email, password=password, lang="en", host=QX_HOST)
-        try:
-            check, reason = await asyncio.wait_for(client.connect(), timeout=60)
-            if not check:
-                return {"success": False, "error": str(reason)}
-            ssid, cookies = self._extract_session(client, email)
-            if not ssid:
-                return {"success": False, "error": "تم تسجيل الدخول لكن لم نستطع قراءة بيانات الجلسة"}
-            return {"success": True, "ssid": ssid, "cookies": cookies or ""}
-        except asyncio.TimeoutError:
-            return {"success": False, "error": "انتهت المهلة، ربما Quotex منع الاتصال أو طلب رمز تحقق"}
-        except Exception as e:
-            text = f"{type(e).__name__}: {e}"
-            if "EOF" in text:
-                text += " (Quotex طلب رمز تحقق على البريد)"
-            return {"success": False, "error": text}
-        finally:
-            await self._safe_close(client)
+        for host in HOSTS_TO_TRY:
+            client = None
+            try:
+                client = Quotex(email=email, password=password, lang="en", host=host)
+                check, reason = await asyncio.wait_for(client.connect(), timeout=60)
+                if not check:
+                    await self._safe_close(client)
+                    continue
+                ssid, cookies = self._extract_session(client, email)
+                if not ssid:
+                    await self._safe_close(client)
+                    return {"success": False, "error": "قراءة الجلسة فشلت"}
+                await self._safe_close(client)
+                return {"success": True, "ssid": ssid, "cookies": cookies or ""}
+            except asyncio.TimeoutError:
+                if client:
+                    await self._safe_close(client)
+                continue
+            except Exception as e:
+                if client:
+                    await self._safe_close(client)
+                print(f"login attempt {host} failed: {e}")
+                continue
+        return {"success": False, "error": "فشل تسجيل الدخول على كل النطاقات"}
 
     async def test_session(self, ssid, cookies=None):
-        client = None
+        client, msg = await self._connect_any_host(ssid, cookies, user_id="test_" + ssid[:20])
+        if client is None:
+            return {"success": False, "error": msg}
         try:
-            client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client, user_id="test_" + ssid[:20])
-            if not check:
-                return {"success": False, "error": f"فشل الاتصال: {msg}"}
             balance = await self._get_balance(client)
-            # بعد نجاح الاختبار، صفّر العداد لهذه الجلسة
-            self._fail_count["test_" + ssid[:20]] = 0
             return {"success": True, "balance": balance}
-        except asyncio.TimeoutError:
-            return {"success": False, "error": "انتهت المهلة أثناء الاتصال"}
-        except Exception as e:
-            return {"success": False, "error": f"{type(e).__name__}: {e}"}
         finally:
-            if client:
-                await self._safe_close(client)
-
-    # ---------- حساب المشرف ----------
+            await self._safe_close(client)
 
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
         if not ssid:
-            return False, "لم يتم ربط حساب المشرف بعد"
-
+            return False, "لم يُربط حساب المشرف"
         if self.master_client:
             await self._safe_close(self.master_client)
             self.master_client = None
-
-        try:
-            client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client, user_id="master")
-            if check:
-                acct = get_setting("master_account_type", "demo")
-                await self._switch_account(client, acct)
-                self.master_client = client
-                return True, "OK"
-            return False, f"فشل الاتصال: {msg}"
-        except Exception as e:
-            return False, str(e)
-
-    # ---------- الإحصائيات وحدود الربح/الخسارة ----------
+        client, msg = await self._connect_any_host(ssid, cookies, user_id="master")
+        if client is None:
+            return False, msg
+        acct = get_setting("master_account_type", "demo")
+        await self._switch_account(client, acct)
+        self.master_client = client
+        return True, "OK"
 
     async def get_user_stats(self, user):
         ssid, cookies = get_session_plain(user)
         if not ssid:
             return {"ok": False, "error": "لا توجد جلسة"}
-
-        client = None
+        client, msg = await self._connect_any_host(ssid, cookies, user_id=user.get("id"))
+        if client is None:
+            return {"ok": False, "error": f"فشل الاتصال: {msg}"}
         try:
-            client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client, user_id=user.get("id"))
-            if not check:
-                return {"ok": False, "error": f"فشل الاتصال: {msg}"}
             await self._switch_account(client, user.get("account_type", "demo"))
             balance = await self._get_balance(client)
             return self._format_stats(user, balance)
-        except Exception as e:
-            return {"ok": False, "error": str(e) or "خطأ في الاتصال"}
         finally:
-            if client:
-                await self._safe_close(client)
+            await self._safe_close(client)
 
     def _format_stats(self, user, balance):
-        start = user.get("start_balance")
-        if not start or start <= 0:
-            start = balance
+        start = user.get("start_balance") or balance
         diff = balance - start
         pct = (diff / start * 100) if start else 0.0
         return {
-            "ok": True,
-            "balance": round(balance, 2),
-            "start": round(start, 2),
-            "diff": round(diff, 2),
-            "pct": round(pct, 2),
+            "ok": True, "balance": round(balance, 2), "start": round(start, 2),
+            "diff": round(diff, 2), "pct": round(pct, 2),
             "is_copying": bool(user.get("is_copying")),
             "notification": user.get("last_notification"),
         }
@@ -308,12 +281,10 @@ class QuotexCopyManager:
         start = user.get("start_balance")
         if not start or start <= 0 or not user.get("is_copying"):
             return False, ""
-
         diff = balance - start
         pct = diff / start * 100.0
         max_loss = user.get("max_loss_value") or 0
         max_profit = user.get("max_profit_value") or 0
-
         if (user.get("trade_mode") or "percent") == "fixed":
             loss_hit = max_loss > 0 and diff <= -abs(max_loss)
             profit_hit = max_profit > 0 and diff >= abs(max_profit)
@@ -324,12 +295,11 @@ class QuotexCopyManager:
             profit_hit = max_profit > 0 and pct >= abs(max_profit)
             loss_txt = f"{pct:.2f}% (${abs(diff):.2f})"
             profit_txt = f"+{pct:.2f}% (${diff:.2f})"
-
-        tail = f"\nرصيد البداية: ${start:.2f} ← الرصيد الحالي: ${balance:.2f}"
+        tail = f"\nرصيد البداية: ${start:.2f} ← الحالي: ${balance:.2f}"
         if loss_hit:
-            return True, f"⚠️ تم الوصول لحد الخسارة وإيقاف النسخ تلقائياً.\nخسارة الجلسة: {loss_txt}{tail}"
+            return True, f"⚠️ حد الخسارة.\n{loss_txt}{tail}"
         if profit_hit:
-            return True, f"🎉 تهانينا! حققت هدف الربح وتم إيقاف النسخ تلقائياً.\nربح الجلسة: {profit_txt}{tail}"
+            return True, f"🎉 هدف الربح.\n{profit_txt}{tail}"
         return False, ""
 
     def _stop_copying(self, user_id, notification):
@@ -347,21 +317,17 @@ class QuotexCopyManager:
             stats = await self.get_user_stats(user)
             if not stats.get("ok"):
                 return stats
-
-            should_stop, note = self._check_limits(user, stats["balance"])
-            if should_stop:
+            stop, note = self._check_limits(user, stats["balance"])
+            if stop:
                 self._stop_copying(user["id"], note)
                 stats["is_copying"] = False
                 stats["notification"] = note
             else:
                 conn = get_db()
-                conn.execute(
-                    "UPDATE users SET balance_version = balance_version + 1 WHERE id = ?",
-                    (user["id"],),
-                )
+                conn.execute("UPDATE users SET balance_version = balance_version + 1 WHERE id = ?",
+                             (user["id"],))
                 conn.commit()
                 conn.close()
-
             self.set_cached_stats(user["id"], stats)
             return stats
         except Exception as e:
@@ -377,59 +343,46 @@ class QuotexCopyManager:
                     conn.close()
                     if row and row["quotex_ssid"]:
                         await self.refresh_and_notify(dict(row))
-                except Exception as e:
-                    print(f"refresh failed for {key}: {e}")
-        except Exception as e:
-            print(f"_refresh_after_trade error: {e}")
-
-    # ---------- تنفيذ الصفقات ----------
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
-            return await client.buy(
-                amount=amount, asset=asset, direction=direction,
-                duration=expiry, time_mode=time_mode,
-            )
+            return await client.buy(amount=amount, asset=asset, direction=direction,
+                                    duration=expiry, time_mode=time_mode)
         except TypeError:
-            return await client.buy(
-                amount=amount, asset=asset, direction=direction, duration=expiry,
-            )
+            return await client.buy(amount=amount, asset=asset, direction=direction,
+                                    duration=expiry)
 
     async def _buy(self, client, asset, direction, amount, expiry, time_mode="TIMER"):
-        print(f"  trying: {asset} {direction} ${amount:.2f} ({expiry}s, {time_mode})")
         try:
             result = await self._buy_once(client, asset, direction, amount, expiry, time_mode)
-            print(f"  result: {result}")
             if result[0]:
                 return (True, result[1], asset)
         except Exception as e:
-            print(f"  buy error: {type(e).__name__}: {e}")
-
+            print(f"  buy error: {e}")
         if asset.endswith("_otc"):
             alt = asset.replace("_otc", "")
             try:
                 result = await self._buy_once(client, alt, direction, amount, expiry, time_mode)
-                print(f"  alt result: {result}")
                 if result[0]:
                     return (True, result[1], alt)
-            except Exception as e:
-                print(f"  alt buy error: {type(e).__name__}: {e}")
-
-        return (False, "فشلت جميع المحاولات", asset)
+            except Exception:
+                pass
+        return (False, "فشلت المحاولات", asset)
 
     async def open_master_trade(self, asset, direction, amount, expiry, time_mode):
         if not self.master_client:
             ok, msg = await self.connect_master()
             if not ok:
                 return {"success": False, "error": msg, "actual_asset": asset}
-
         balance = await self._get_balance(self.master_client)
         if balance <= 0:
-            return {"success": False, "error": "لا يوجد رصيد كافٍ في حساب المشرف", "actual_asset": asset}
-
+            return {"success": False, "error": "لا يوجد رصيد", "actual_asset": asset}
         status, info, actual_asset = await self._buy(
-            self.master_client, asset, direction, amount, expiry, time_mode
-        )
+            self.master_client, asset, direction, amount, expiry, time_mode)
         if status:
             order_id = info.get("id", "N/A") if isinstance(info, dict) else "N/A"
             return {"success": True, "order_id": order_id, "actual_asset": actual_asset}
@@ -439,38 +392,29 @@ class QuotexCopyManager:
         ssid, cookies = get_session_plain(follower)
         if not ssid:
             return {"success": False, "error": "لا توجد جلسة"}
-
         user_id = follower["id"]
         account_type = follower.get("account_type", "demo")
-        client = None
 
         def save_notification(msg):
             try:
                 conn = get_db()
-                conn.execute(
-                    "UPDATE users SET last_notification = ?, "
-                    "balance_version = balance_version + 1 WHERE id = ?",
-                    (msg, user_id),
-                )
+                conn.execute("UPDATE users SET last_notification = ?, balance_version = balance_version + 1 WHERE id = ?",
+                             (msg, user_id))
                 conn.commit()
                 conn.close()
             except Exception:
                 pass
 
+        client, msg = await self._connect_any_host(ssid, cookies, user_id=user_id)
+        if client is None:
+            return {"success": False, "error": f"فشل الاتصال: {msg}"}
         try:
-            client = self._make_client(ssid, cookies)
-            check, msg = await self._connect(client, user_id=user_id)
-            if not check:
-                return {"success": False, "error": f"فشل الاتصال: {msg}"}
-
             await self._switch_account(client, account_type)
-
             balance = await self._get_balance(client)
             if balance <= 0:
-                err = "❌ لا يوجد رصيد كافٍ للنسخ"
+                err = "❌ لا يوجد رصيد كافٍ"
                 save_notification(err)
                 return {"success": False, "error": err}
-
             start_balance = follower.get("start_balance")
             if not start_balance or start_balance <= 0:
                 start_balance = balance
@@ -479,34 +423,29 @@ class QuotexCopyManager:
                 conn.commit()
                 conn.close()
                 follower["start_balance"] = start_balance
-
-            should_stop, note = self._check_limits(follower, balance)
-            if should_stop:
+            stop, note = self._check_limits(follower, balance)
+            if stop:
                 self._stop_copying(user_id, note)
                 self.clear_cache(user_id)
-                return {"success": False, "error": "تم الوصول لحد الربح أو الخسارة"}
-
-            trade_value = follower.get("trade_value") or 1.0
+                return {"success": False, "error": "حد الربح/الخسارة"}
+            tv = follower.get("trade_value") or 1.0
             if (follower.get("trade_mode") or "percent") == "fixed":
-                amount = trade_value
+                amount = tv
             else:
-                amount = round(balance * (trade_value / 100.0), 2)
+                amount = round(balance * (tv / 100.0), 2)
             if amount < 1:
                 amount = 1.0
             if amount > balance:
                 amount = balance
-
             status, info, _ = await self._buy(client, asset, direction, amount, expiry, time_mode)
             if status:
                 order_id = info.get("id", "N/A") if isinstance(info, dict) else "N/A"
                 return {"success": True, "order_id": order_id, "amount": amount}
             return {"success": False, "error": str(info)}
-
         except Exception as e:
             return {"success": False, "error": str(e)}
         finally:
-            if client:
-                await self._safe_close(client)
+            await self._safe_close(client)
 
     def _active_followers(self):
         conn = get_db()
@@ -534,42 +473,30 @@ class QuotexCopyManager:
             *[self.copy_to_follower(f, asset, direction, expiry, time_mode) for f in followers],
             return_exceptions=True,
         )
-        for f, r in zip(followers, results):
-            if not (isinstance(r, dict) and r.get("success")):
-                print(f"  copy failed for user {f['id']}: {r if not isinstance(r, dict) else r.get('error')}")
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
     async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER"):
         ok, msg = await self.connect_master()
         if not ok:
             return {"success": False, "error": msg}
-
         balance = await self._get_balance(self.master_client)
         if balance <= 0:
-            return {"success": False, "error": "لا يوجد رصيد كافٍ في حساب المشرف"}
-
+            return {"success": False, "error": "لا يوجد رصيد"}
         master_amount = max(1.0, round(balance * (master_pct / 100.0), 2))
         master = await self.open_master_trade(asset, direction, master_amount, expiry, time_mode)
         if not master["success"]:
             return master
-
         actual_asset = master.get("actual_asset", asset)
         followers = self._active_followers()
         copied = await self._copy_all(followers, actual_asset, direction, expiry, time_mode) if followers else 0
         self._log_trade(actual_asset, direction, master_amount, expiry, master["order_id"], copied)
-
         if followers:
             self._track(asyncio.create_task(
-                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])
-            ))
-
+                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
         return {
-            "success": True,
-            "master_order_id": master["order_id"],
-            "master_amount": master_amount,
-            "actual_asset": actual_asset,
-            "copied_count": copied,
-            "total_followers": len(followers),
+            "success": True, "master_order_id": master["order_id"],
+            "master_amount": master_amount, "actual_asset": actual_asset,
+            "copied_count": copied, "total_followers": len(followers),
         }
 
     async def _master_signal_trade(self, asset, direction, expiry):
@@ -578,7 +505,7 @@ class QuotexCopyManager:
         except ValueError:
             pct = 10.0
         try:
-            ok, msg = await self.connect_master()
+            ok, _ = await self.connect_master()
             if not ok:
                 return
             balance = await self._get_balance(self.master_client)
@@ -587,11 +514,10 @@ class QuotexCopyManager:
             amount = max(1.0, round(balance * (pct / 100.0), 2))
             await self.open_master_trade(asset, direction, amount, expiry, "TIMER")
         except Exception as e:
-            print(f"master signal trade error: {e}")
+            print(f"master signal error: {e}")
 
     async def broadcast_signal(self, asset, direction, expiry=60, lead_sec=60):
         await asyncio.sleep(lead_sec)
-
         followers = self._active_followers()
         jobs = []
         if followers:
@@ -600,15 +526,12 @@ class QuotexCopyManager:
             jobs.append(self._master_signal_trade(asset, direction, expiry))
         if not jobs:
             return
-
         results = await asyncio.gather(*jobs, return_exceptions=True)
         copied = results[0] if followers and isinstance(results[0], int) else 0
-
         self._log_trade(asset, direction, 0, expiry, "signal", copied)
         if followers:
             self._track(asyncio.create_task(
-                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])
-            ))
+                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
 
 
 copy_manager = QuotexCopyManager()
