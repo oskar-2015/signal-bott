@@ -72,9 +72,12 @@ def load_session():
 
     if not os.path.exists(SESSION_FILE):
         return None, None
-    with open(SESSION_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("cookies_str"), data.get("ssid")
+    try:
+        with open(SESSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("cookies_str"), data.get("ssid")
+    except Exception:
+        return None, None
 
 
 def clean_candles(candles):
@@ -127,6 +130,9 @@ def analyze_strength(closes):
 
 
 def send_telegram(asset, direction, entry_time, duration_min):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("telegram skipped: missing token/chat")
+        return
     arrow = "صعود Call \U0001F7E2" if direction == "up" else "هبوط Put \U0001F534"
     text = (
         "\U0001F680 إشارة قوية مكتشفة!\n"
@@ -155,9 +161,11 @@ async def connect_client():
     if not cookies_str or not ssid:
         print("no session data available")
         return None
-    client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.io")
+    # ⚠️ تم تصحيح الدومين: quotex.com بدلاً من quotex.io
+    client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.com")
     client.set_session(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         cookies=cookies_str,
         ssid=ssid
     )
@@ -166,10 +174,13 @@ async def connect_client():
     except asyncio.TimeoutError:
         print("connect timeout")
         return None
+    except Exception as e:
+        print(f"connect exception: {e}")
+        return None
     if not check:
         print(f"connect failed: {reason}")
         return None
-    print("connected")
+    print("connected successfully")
     return client
 
 
@@ -225,15 +236,29 @@ async def pick_best_signal(client, assets):
 async def main_loop():
     client = None
     cycle = 0
+    consecutive_failures = 0
+
     while True:
         try:
             if client is None:
                 client = await connect_client()
                 if client is None:
-                    print("connect failed, retrying in 5 minutes to avoid rate limit")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        print("=" * 70)
+                        print("⚠️  5 consecutive connection failures - bot stopping to protect IP")
+                        print("⚠️  Update qx_session.json with a fresh session and redeploy")
+                        print("=" * 70)
+                        try:
+                            while True:
+                                time.sleep(3600)
+                        except KeyboardInterrupt:
+                            return
+                    print(f"connect failed (attempt {consecutive_failures}/5), retrying in 5 minutes")
                     await asyncio.sleep(300)
                     continue
 
+            consecutive_failures = 0
             cycle += 1
             print(f"cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
             top_assets = await get_top_open_assets(client)
@@ -269,44 +294,79 @@ async def main_loop():
             await asyncio.sleep(300)
 
 
+def hold_forever(message_lines):
+    for line in message_lines:
+        print(line)
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        print("stopped")
+
+
 if __name__ == "__main__":
     copy_manager.start_background_loop()
     keep_alive()
 
-    # فحص حالة تفعيل بوت الإشارات
     signals_enabled = os.environ.get("ENABLE_SIGNALS", "false").lower() == "true"
 
     if not signals_enabled:
-        print("=" * 70)
-        print("ℹ️  Signal bot is DISABLED (ENABLE_SIGNALS not set to 'true')")
-        print("ℹ️  ✅ Web app + user account connections work normally")
-        print("ℹ️  ✅ Android app linking works normally")
-        print("ℹ️  To enable signals: add ENABLE_SIGNALS=true in Render env vars")
-        print("=" * 70)
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            print("stopped")
-    else:
-        # فحص سريع: هل الجلسة موجودة؟
-        _cookies, _ssid = load_session()
-        if not _cookies or not _ssid:
-            print("=" * 70)
-            print("⚠️  Signal bot enabled but qx_session.json is missing or invalid!")
-            print("⚠️  Bot disabled to avoid rate limiting.")
-            print("⚠️  Update qx_session.json and redeploy to enable signals.")
-            print("=" * 70)
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                print("stopped")
+        hold_forever([
+            "=" * 70,
+            "ℹ️  Signal bot is DISABLED (ENABLE_SIGNALS not set to 'true')",
+            "ℹ️  ✅ Web app + user account connections work normally",
+            "ℹ️  ✅ Android app linking works normally",
+            "ℹ️  To enable signals: add ENABLE_SIGNALS=true in Render env vars",
+            "=" * 70,
+        ])
+        raise SystemExit(0)
+
+    _cookies, _ssid = load_session()
+    if not _cookies or not _ssid:
+        hold_forever([
+            "=" * 70,
+            "⚠️  Signal bot enabled but qx_session.json is missing or invalid!",
+            "⚠️  Bot disabled to avoid rate limiting.",
+            "⚠️  Update qx_session.json and redeploy to enable signals.",
+            "=" * 70,
+        ])
+        raise SystemExit(0)
+
+    print("=" * 70)
+    print("✅ Signal bot is ENABLED - verifying session before starting loop...")
+    print("=" * 70)
+
+    # فحص مسبق: هل الجلسة تعمل فعلاً قبل بدء الحلقة؟
+    try:
+        test_client = asyncio.run(connect_client())
+        if test_client is None:
+            hold_forever([
+                "=" * 70,
+                "⚠️  Session verification FAILED - bot will NOT start",
+                "⚠️  qx_session.json is stale or expired",
+                "⚠️  Update qx_session.json and redeploy",
+                "=" * 70,
+            ])
+            raise SystemExit(0)
         else:
-            print("=" * 70)
-            print("✅ Signal bot is ENABLED - starting trading loop")
-            print("=" * 70)
             try:
-                asyncio.run(main_loop())
-            except KeyboardInterrupt:
-                print("stopped")
+                asyncio.run(test_client.close())
+            except Exception:
+                pass
+            print("✅ Session verified successfully")
+    except Exception as e:
+        hold_forever([
+            "=" * 70,
+            f"⚠️  Session verification error: {e}",
+            "⚠️  Bot will NOT start to protect IP",
+            "=" * 70,
+        ])
+        raise SystemExit(0)
+
+    print("=" * 70)
+    print("✅ Signal bot is starting trading loop")
+    print("=" * 70)
+    try:
+        asyncio.run(main_loop())
+    except KeyboardInterrupt:
+        print("stopped")
