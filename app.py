@@ -133,6 +133,28 @@ def dashboard():
     return render_template("dashboard.html", user=user, apk_url=APK_DOWNLOAD_URL)
 
 
+@app.route("/app_login/<key>")
+def app_login(key):
+    """يستخدمه تطبيق الأندرويد للدخول التلقائي بلوحة التحكم بعد التحقق من المفتاح."""
+    key = key.strip().upper()
+    ok, msg = is_key_valid(key)
+    if not ok:
+        return f"""
+        <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{{background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center;}}
+        h2{{color:#d4af37;}}</style></head><body>
+        <h2>⚠️ خطأ</h2><p>{msg}</p>
+        <p>أعد تشغيل التطبيق وأدخل مفتاحاً صحيحاً.</p>
+        </body></html>
+        """, 403
+
+    session["license_key"] = key
+    session.permanent = True
+    ensure_user(key)
+    return redirect(url_for("dashboard"))
+
+
 def _store_user_session(key, email, ssid, cookies):
     user = get_user(key)
     save_user_session(key, ssid, cookies, email)
