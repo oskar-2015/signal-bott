@@ -28,7 +28,6 @@
         </div>
         {% endif %}
 
-        <!-- مفتاح التفعيل -->
         <div class="card">
             <h3>🔑 مفتاح التفعيل</h3>
             <p class="hint" style="text-align: center;">
@@ -36,7 +35,6 @@
             </p>
         </div>
 
-        <!-- ربط الحساب -->
         <div class="card {% if not user.quotex_ssid %}highlight{% endif %}">
             <h3>🔗 ربط حساب Quotex</h3>
             {% if user.quotex_ssid %}
@@ -50,45 +48,31 @@
                 {% endif %}
             {% else %}
                 <p style="text-align: center; color: #f0e0a0; font-weight: 700; margin-bottom: 20px;">
-                    لربط حسابك، حمّل تطبيق Oscar Linker واتبع الخطوات
+                    لربط حسابك، اضغط الزر أدناه وسجّل دخولك إلى Quotex
                 </p>
 
-                <a href="{{ apk_url }}" class="btn-primary" 
+                <button onclick="handleConnect()" id="connectBtn" class="btn-primary"
+                        style="display:none; width:100%; padding:16px; font-size:16px; margin-bottom:15px;">
+                    🔗 ربط حساب Quotex الآن
+                </button>
+
+                <a href="{{ apk_url }}" id="apkBtn" class="btn-primary"
                    style="display:block; text-align:center; padding:16px; text-decoration:none; border-radius:10px; font-weight:700; margin-bottom:15px; font-size:16px;">
                     📥 تحميل تطبيق الربط (APK)
                 </a>
 
                 <div style="background: #0a0a0a; padding: 18px; border-radius: 10px; border: 1px solid #222;">
-                    <h4 style="color: #d4af37; text-align: right; margin-bottom: 12px; font-size: 15px;">
-                        خطوات الربط (3 خطوات فقط):
-                    </h4>
+                    <h4 style="color: #d4af37; text-align: right; margin-bottom: 12px; font-size: 15px;">خطوات الربط:</h4>
                     <ol style="color: #ccc; font-size: 14px; line-height: 2; padding-right: 20px;">
-                        <li>نزّل التطبيق وثبّته على هاتفك</li>
-                        <li>افتح التطبيق وأدخل مفتاحك: <code>{{ user.license_key }}</code></li>
-                        <li>سجّل دخولك إلى Quotex داخل التطبيق</li>
+                        <li>اضغط زر "ربط حساب Quotex"</li>
+                        <li>سجّل دخولك داخل التطبيق</li>
+                        <li>سيتم الربط تلقائياً</li>
                     </ol>
-                    <p style="text-align: center; color: #81c784; margin-top: 12px; font-weight: 700; margin-bottom: 0;">
-                        بعدها سيتم الربط تلقائياً وستعود هنا لتفعيل التداول ✅
-                    </p>
                 </div>
-
-                <details style="margin-top: 20px;">
-                    <summary>خيارات متقدمة (للمشرف فقط)</summary>
-                    <p class="hint">
-                        يمكنك لصق SSID يدوياً إذا كنت تعرفه مسبقاً.
-                    </p>
-                    <form action="/link_session" method="POST" class="slow">
-                        <input type="email" name="email" placeholder="البريد (اختياري)" autocomplete="off">
-                        <input type="text" name="ssid" placeholder="SSID" required autocomplete="off" style="direction:ltr;">
-                        <textarea name="cookies" placeholder="Cookies (اختياري)"></textarea>
-                        <button type="submit" class="btn-secondary">ربط بالجلسة</button>
-                    </form>
-                </details>
             {% endif %}
         </div>
 
         {% if user.quotex_ssid %}
-        <!-- إعدادات النسخ -->
         <div class="card">
             <h3>⚙️ إعدادات التداول</h3>
             <form action="/save_settings" method="POST">
@@ -105,21 +89,15 @@
                 </select>
 
                 <label class="field-label" id="tradeValueLabel">قيمة الدخول</label>
-                <input type="number" name="trade_value" step="0.1" min="0.1"
-                       value="{{ user.trade_value or 1.0 }}" required
-                       {% if user.settings_locked %}disabled{% endif %}>
+                <input type="number" name="trade_value" step="0.1" min="0.1" value="{{ user.trade_value or 1.0 }}" required {% if user.settings_locked %}disabled{% endif %}>
                 <p class="hint" id="tradeValueHint">—</p>
 
                 <label class="field-label" id="maxLossLabel">🛑 إيقاف تلقائي عند الخسارة</label>
-                <input type="number" name="max_loss_value" step="0.1" min="0"
-                       value="{{ user.max_loss_value or 0 }}"
-                       {% if user.settings_locked %}disabled{% endif %}>
+                <input type="number" name="max_loss_value" step="0.1" min="0" value="{{ user.max_loss_value or 0 }}" {% if user.settings_locked %}disabled{% endif %}>
                 <p class="hint">0 = تعطيل</p>
 
                 <label class="field-label" id="maxProfitLabel">✅ إيقاف تلقائي عند الربح</label>
-                <input type="number" name="max_profit_value" step="0.1" min="0"
-                       value="{{ user.max_profit_value or 0 }}"
-                       {% if user.settings_locked %}disabled{% endif %}>
+                <input type="number" name="max_profit_value" step="0.1" min="0" value="{{ user.max_profit_value or 0 }}" {% if user.settings_locked %}disabled{% endif %}>
                 <p class="hint">0 = تعطيل</p>
 
                 {% if not user.settings_locked %}
@@ -134,7 +112,6 @@
             {% endif %}
         </div>
 
-        <!-- حالة التداول الآلي -->
         <div class="card {% if user.is_copying %}highlight{% endif %}">
             <h3>📊 حالة التداول الآلي</h3>
             <p style="text-align: center; margin-bottom: 15px;">
@@ -143,7 +120,7 @@
                 {% else %}
                     <span class="badge inactive">معطّل ⛔</span>
                 {% endif %}
-                <span id="liveIndicator" class="live-dot" title="تحديث مباشر"></span>
+                <span id="liveIndicator" class="live-dot"></span>
             </p>
 
             <div class="live-stats">
@@ -175,89 +152,92 @@
             </form>
         </div>
 
-        <!-- فصل الحساب -->
         <div class="card">
             <h3>🔌 فصل الحساب</h3>
-            <p class="hint">
-                عند فصل الحساب، سيتم مسح بيانات الجلسة وإعادتك إلى صفحة ربط Quotex.
-            </p>
+            <p class="hint">عند فصل الحساب، سيتم مسح بيانات الجلسة.</p>
             <form action="/unlink" method="POST">
                 <button type="submit" class="btn-danger">فصل الحساب</button>
             </form>
         </div>
         {% endif %}
 
-        <a href="/logout" class="logout">تسجيل خروج</a>
+        <a href="#" onclick="handleLogout(); return false;" class="logout">تسجيل خروج</a>
 
         <p class="disclaimer">
             تنبيه: التداول في الخيارات الثنائية ينطوي على مخاطر عالية وقد تخسر أموالك بالكامل.
-            الإشارات تحليل آلي وليست نصيحة مالية ولا تضمن أي ربح، وأنت المسؤول الوحيد عن قراراتك.
         </p>
     </div>
 
     <script>
-        let reloading = false;
+        // إظهار زر الربط داخل التطبيق فقط (عند وجود OscarBridge)
+        if (window.OscarBridge && window.OscarBridge.startConnect) {
+            const cb = document.getElementById('connectBtn');
+            const ab = document.getElementById('apkBtn');
+            if (cb) cb.style.display = 'block';
+            if (ab) ab.style.display = 'none';
+        }
 
+        function handleConnect() {
+            if (window.OscarBridge && window.OscarBridge.startConnect) {
+                window.OscarBridge.startConnect();
+            } else {
+                window.location.href = '{{ apk_url }}';
+            }
+        }
+
+        function handleLogout() {
+            if (window.OscarBridge && window.OscarBridge.logout) {
+                window.OscarBridge.logout();
+            } else {
+                window.location.href = '/logout';
+            }
+        }
+
+        let reloading = false;
         document.querySelectorAll('form.slow').forEach(function (f) {
             f.addEventListener('submit', function () {
                 const b = f.querySelector('button[type=submit]');
-                if (b) {
-                    setTimeout(function () {
-                        b.disabled = true;
-                        b.textContent = 'جاري التنفيذ... قد يستغرق دقيقة';
-                    }, 50);
-                }
+                if (b) setTimeout(function () { b.disabled = true; b.textContent = 'جاري التنفيذ...'; }, 50);
             });
         });
 
         function updateLabels() {
             const mode = document.getElementById('tradeMode');
             if (!mode) return;
-            const tradeValueLabel = document.getElementById('tradeValueLabel');
-            const tradeValueHint = document.getElementById('tradeValueHint');
-            const maxLossLabel = document.getElementById('maxLossLabel');
-            const maxProfitLabel = document.getElementById('maxProfitLabel');
-
+            const tvl = document.getElementById('tradeValueLabel');
+            const tvh = document.getElementById('tradeValueHint');
+            const mll = document.getElementById('maxLossLabel');
+            const mpl = document.getElementById('maxProfitLabel');
             if (mode.value === 'fixed') {
-                tradeValueLabel.textContent = 'قيمة الدخول ($)';
-                tradeValueHint.textContent = 'مثال: 5 = 5$ لكل صفقة';
-                maxLossLabel.textContent = '🛑 إيقاف تلقائي عند الخسارة ($)';
-                maxProfitLabel.textContent = '✅ إيقاف تلقائي عند الربح ($)';
+                tvl.textContent = 'قيمة الدخول ($)';
+                tvh.textContent = 'مثال: 5 = 5$ لكل صفقة';
+                mll.textContent = '🛑 إيقاف تلقائي عند الخسارة ($)';
+                mpl.textContent = '✅ إيقاف تلقائي عند الربح ($)';
             } else {
-                tradeValueLabel.textContent = 'قيمة الدخول (%)';
-                tradeValueHint.textContent = 'مثال: 1 = 1% من رصيدك';
-                maxLossLabel.textContent = '🛑 إيقاف تلقائي عند الخسارة (%)';
-                maxProfitLabel.textContent = '✅ إيقاف تلقائي عند الربح (%)';
+                tvl.textContent = 'قيمة الدخول (%)';
+                tvh.textContent = 'مثال: 1 = 1% من رصيدك';
+                mll.textContent = '🛑 إيقاف تلقائي عند الخسارة (%)';
+                mpl.textContent = '✅ إيقاف تلقائي عند الربح (%)';
             }
         }
-
-        const tradeModeEl = document.getElementById('tradeMode');
-        if (tradeModeEl) {
-            tradeModeEl.addEventListener('change', updateLabels);
-            updateLabels();
-        }
+        const tme = document.getElementById('tradeMode');
+        if (tme) { tme.addEventListener('change', updateLabels); updateLabels(); }
 
         function renderStats(data) {
             if (!data || !data.ok) return;
-
             document.getElementById('currentBalance').textContent = '$' + data.balance.toFixed(2);
             document.getElementById('startBalance').textContent = '$' + data.start.toFixed(2);
-
             const plEl = document.getElementById('profitLoss');
-            const diff = data.diff;
-            const pct = data.pct;
-
-            if (diff > 0) {
+            if (data.diff > 0) {
                 plEl.className = 'pl-positive';
-                plEl.textContent = '+$' + diff.toFixed(2) + ' (+' + pct.toFixed(2) + '%)';
-            } else if (diff < 0) {
+                plEl.textContent = '+$' + data.diff.toFixed(2) + ' (+' + data.pct.toFixed(2) + '%)';
+            } else if (data.diff < 0) {
                 plEl.className = 'pl-negative';
-                plEl.textContent = '-$' + Math.abs(diff).toFixed(2) + ' (' + pct.toFixed(2) + '%)';
+                plEl.textContent = '-$' + Math.abs(data.diff).toFixed(2) + ' (' + data.pct.toFixed(2) + '%)';
             } else {
                 plEl.className = 'pl-neutral';
                 plEl.textContent = '0.00';
             }
-
             if (data.notification && !document.getElementById('notificationCard') && !reloading) {
                 reloading = true;
                 setTimeout(function () { location.reload(); }, 300);
@@ -275,7 +255,6 @@
                 if (dot) dot.style.opacity = '0.3';
             }
         }
-
         if (document.getElementById('currentBalance')) {
             poll();
             setInterval(poll, 10000);
