@@ -157,7 +157,7 @@ def api_app_save_and_enable(key):
         trade_value = float(data.get("trade_value", 1.0))
         max_loss_value = float(data.get("max_loss_value", 0))
         max_profit_value = float(data.get("max_profit_value", 0))
-        enable_type = data.get("enable_type", "copy") # "copy" or "auto"
+        enable_type = data.get("enable_type", "copy") 
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "قيم غير صحيحة"}), 400
 
@@ -174,7 +174,6 @@ def api_app_save_and_enable(key):
     is_copying = 1 if enable_type == "copy" else 0
     is_auto_trading = 1 if enable_type == "auto" else 0
 
-    # تفعيل النسخ أو التداول يتطلب جلب الرصيد أولاً
     try:
         stats = copy_manager.run_async(copy_manager.get_user_stats(user), timeout=70)
     except Exception as e:
@@ -400,32 +399,19 @@ def admin_reset_device():
 
 @app.route("/admin/set_master", methods=["POST"])
 @admin_required
-def admin_set_master():@app.route("/admin/clear_master", methods=["POST"])
-@admin_required
-def admin_clear_master():
-    set_secret_setting("master_ssid", "")
-    set_secret_setting("master_cookies", "")
-    set_setting("master_email", "")
-    copy_manager.master_client = None
-    flash("تم فصل حساب المشرف", "success")
-    return redirect(url_for("admin_panel"))
+def admin_set_master():
     email = request.form.get("master_email", "").strip()
     password = request.form.get("master_password", "").strip()
-    ssid = request.form.get("master_ssid", "").strip()
-    cookies = request.form.get("master_cookies", "").strip()
-    if ssid or cookies:
-        try: check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
-        except Exception as e: check = {"success": False, "error": str(e)}
-        if not check.get("success"):
-            flash(f"❌ الجلسة لا تعمل: {check.get('error', '')}", "error")
-            return redirect(url_for("admin_panel"))
-        result = {"success": True, "ssid": ssid, "cookies": cookies}
-    elif email and password:
-        try: result = copy_manager.run_async(copy_manager.login_with_credentials(email, password), timeout=90)
-        except Exception as e: result = {"success": False, "error": str(e)}
-    else:
-        flash("أدخل البريد وكلمة المرور، أو SSID/Cookies", "error")
+    
+    if not email or not password:
+        flash("أدخل البريد وكلمة المرور", "error")
         return redirect(url_for("admin_panel"))
+    
+    try: 
+        result = copy_manager.run_async(copy_manager.login_with_credentials(email, password), timeout=90)
+    except Exception as e: 
+        result = {"success": False, "error": str(e)}
+    
     if result.get("success"):
         set_setting("master_email", email)
         set_secret_setting("master_ssid", result["ssid"])
@@ -433,6 +419,16 @@ def admin_clear_master():
         flash("✅ تم ربط حساب المشرف", "success")
     else:
         flash(f"❌ فشل: {result.get('error', 'خطأ')}", "error")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/clear_master", methods=["POST"])
+@admin_required
+def admin_clear_master():
+    set_secret_setting("master_ssid", "")
+    set_secret_setting("master_cookies", "")
+    set_setting("master_email", "")
+    copy_manager.master_client = None
+    flash("تم فصل حساب المشرف", "success")
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/save_master_settings", methods=["POST"])
