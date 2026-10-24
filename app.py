@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
 import secrets
+import re
+import json as json_lib
 from functools import wraps
 from flask import (
     Flask, render_template, request, redirect,
@@ -30,6 +32,14 @@ DEVICE_COOKIE = "oscar_device"
 APK_DOWNLOAD_URL = os.environ.get("APK_DOWNLOAD_URL", "#")
 
 init_db()
+
+@app.after_request
+def add_no_cache(response):
+    if request.path.startswith("/admin") or request.path.startswith("/api/admin"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 def clear_user_cache(user_id):
     try: copy_manager.clear_cache(user_id)
@@ -121,7 +131,7 @@ def _store_user_session(key, email, ssid, cookies):
     save_user_session(key, ssid, cookies, email)
     if user: clear_user_cache(user["id"])
 
-# ==================== API للتطبيق ====================
+# ==================== API للتطبيق المستخدم ====================
 
 @app.route("/api/app/user_info/<key>")
 def api_app_user_info(key):
@@ -237,13 +247,15 @@ def api_app_unlink(key):
     if user: clear_user_cache(user["id"])
     return jsonify({"ok": True})
 
-# ==================== API لربط الماستر والنسخ الفوري ====================
+# ==================== API للماستر ====================
 
 @app.route("/api/admin/is_linked")
 def api_admin_is_linked():
     ssid = get_secret_setting("master_ssid")
+    is_valid_ssid = bool(ssid and not (ssid.startswith('<') or 'object at 0x' in ssid))
+    print(f"[IS_LINKED] master_ssid exists={bool(ssid)}, valid={is_valid_ssid}", flush=True)
     return jsonify({
-        "linked": bool(ssid and not (ssid.startswith('<') or 'object at 0x' in ssid)),
+        "linked": is_valid_ssid,
         "account_type": get_setting("master_account_type", "demo"),
     })
 
@@ -267,225 +279,35 @@ def api_admin_link_master():
     final_ssid = check.get("ssid", "") or ssid
     set_secret_setting("master_ssid", final_ssid)
     set_secret_setting("master_cookies", cookies)
+    print(f"[LINK_MASTER] Saved ssid prefix={final_ssid[:20] if final_ssid else 'none'}", flush=True)
+    return jsonify({"ok": True})
+
+@app.route("/api/admin/raw", methods=["POST"])
+def api_admin_raw():
+    """يستقبل كل رسالة خام من التطبيق للتشخيص."""
+    data = request.get_json(silent=True) or {}
+    raw = str(data.get("raw", ""))[:600]
+    print(f"[RAW] {raw}", flush=True)
     return jsonify({"ok": True})
 
 @app.route("/api/admin/realtime_trade", methods=["POST"])
 def api_admin_realtime_trade():
     data = request.get_json(silent=True) or {}
-    asset = str(data.get("asset", "")).strip()
-    direction = str(data.get("direction", "")).strip()
-    amount = float(data.get("amount", 0))
-    expiry = int(data.get("expiry", 60))
-
-    print(f"[REALTIME] Received trade: {asset} {direction} ${amount} ({expiry}s)", flush=True)
-
-    if not asset or direction not in ("call", "put"):
-        return jsonify({"ok": False, "error": "بيانات غير صالحة"}), 400
-
-    try:
-        # skip_master=True لأن الصفقة نُفذت بالفعل من المتصفح
-        result = copy_manager.run_async(
-            copy_manager.broadcast_trade(asset, direction, amount, expiry, "TIMER", skip_master=True),
-            timeout=300
-        )
-    except Exception as e:
-        print(f"[REALTIME] Exception: {e}", flush=True)
-        result = {"success": False, "error": str(e)}
-
-    print(f"[REALTIME] Result: copied={result.get('copied_count')} total={result.get('total_followers')}", flush=True)
-
-    if result.get("success"):
-        return jsonify({"ok": True, "copied": result.get("copied_count", 0), "total": result.get("total_followers", 0)})
+    
+    # إذا وصلت رسالة خام، نحللها هنا
+    raw = str(data.get("raw", "")).strip()
+    if raw:
+        # استخراج JSON من الرسالة
+        m = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw)
+        if not m:
+            print(f"[REALTIME] No JSON in raw: {raw[:100]}", flush=True)
+            return jsonify({"ok": False, "error": "no json"}), 400
+        try:
+            p = json_lib.loads(m.group(0))
+        except Exception as e:
+            print(f"[REALTIME] JSON parse error: {e} | raw={raw[:200]}", flush=True)
+            return jsonify({"ok": False, "error": "parse fail"}), 400
     else:
-        return jsonify({"ok": False, "error": result.get("error", "فشل النسخ")}), 400
-
-# ==================== نقاط النهاية القديمة للويب ====================
-
-@app.route("/auto_login", methods=["POST"])
-@login_required
-def auto_login():
-    email = request.form.get("email", "").strip()
-    password = request.form.get("password", "").strip()
-    key = session["license_key"]
-    if not email or not password:
-        flash("الرجاء إدخال البريد وكلمة المرور", "error")
-        return redirect(url_for("dashboard"))
-    try:
-        result = copy_manager.run_async(copy_manager.login_with_credentials(email, password), timeout=90)
-    except Exception as e:
-        result = {"success": False, "error": str(e)}
-    if result.get("success"):
-        _store_user_session(key, email, result["ssid"], result.get("cookies", ""))
-        flash("✅ تم ربط الحساب بنجاح", "success")
-    else:
-        flash(f"❌ فشل الربط: {result.get('error', 'خطأ')}", "error")
-    return redirect(url_for("dashboard"))
-
-@app.route("/link_session", methods=["POST"])
-@login_required
-def link_session():
-    key = session["license_key"]
-    ssid = request.form.get("ssid", "").strip()
-    cookies = request.form.get("cookies", "").strip()
-    email = request.form.get("email", "").strip()
-    if not ssid and not cookies:
-        flash("الرجاء لصق SSID أو Cookies", "error")
-        return redirect(url_for("dashboard"))
-    try:
-        check = copy_manager.run_async(copy_manager.test_session(ssid, cookies or None), timeout=90)
-    except Exception as e:
-        check = {"success": False, "error": str(e)}
-    if check.get("success"):
-        _store_user_session(key, email, ssid, cookies)
-        flash("✅ تم ربط الحساب بنجاح", "success")
-    else:
-        flash(f"❌ الجلسة لا تعمل: {check.get('error', 'خطأ')}", "error")
-    return redirect(url_for("dashboard"))
-
-@app.route("/api/link", methods=["POST"])
-def api_link():
-    data = request.get_json(silent=True) or {}
-    key = str(data.get("license_key", "")).strip().upper()
-    ssid = str(data.get("ssid", "")).strip()
-    cookies = str(data.get("cookies", "")).strip()
-    email = str(data.get("email", "")).strip()
-    ok, msg = is_key_valid(key)
-    if not ok: return jsonify({"ok": False, "error": msg}), 403
-    if not ssid and not cookies: return jsonify({"ok": False, "error": "لا توجد جلسة"}), 400
-    ensure_user(key)
-    try:
-        check = copy_manager.run_async(copy_manager.test_session(ssid or "", cookies or None), timeout=90)
-    except Exception as e:
-        check = {"success": False, "error": str(e)}
-    if not check.get("success"):
-        return jsonify({"ok": False, "error": check.get("error", "الجلسة لا تعمل")}), 400
-    final_ssid = check.get("ssid", "") or ssid
-    _store_user_session(key, email, final_ssid, cookies)
-    return jsonify({"ok": True, "ssid_extracted": bool(final_ssid and not ssid)})
-
-@app.route("/unlink", methods=["POST"])
-@login_required
-def unlink():
-    key = session["license_key"]
-    user = get_user(key)
-    clear_user_session(key)
-    if user: clear_user_cache(user["id"])
-    flash("تم فصل الحساب", "success")
-    return redirect(url_for("dashboard"))
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("index"))
-
-# ==================== لوحة المشرف ====================
-
-@app.route("/admin", methods=["GET", "POST"])
-def admin():
-    if request.method == "POST":
-        given = request.form.get("password", "")
-        if ADMIN_PASSWORD and secrets.compare_digest(given, ADMIN_PASSWORD):
-            session["is_admin"] = True
-            session.permanent = True
-            return redirect(url_for("admin_panel"))
-        flash("كلمة المرور غير صحيحة", "error")
-    if session.get("is_admin"): return redirect(url_for("admin_panel"))
-    return render_template("admin_login.html")
-
-@app.route("/admin/panel")
-@admin_required
-def admin_panel():
-    conn = get_db()
-    total_users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-    active_copy = conn.execute("SELECT COUNT(*) AS c FROM users WHERE is_copying = 1").fetchone()["c"]
-    active_auto = conn.execute("SELECT COUNT(*) AS c FROM users WHERE is_auto_trading = 1").fetchone()["c"]
-    users_list = conn.execute("SELECT license_key, quotex_email, quotex_ssid, account_type, is_copying, is_auto_trading, trade_mode, trade_value, start_balance FROM users ORDER BY created_at DESC").fetchall()
-    logs = conn.execute("SELECT * FROM trade_logs ORDER BY created_at DESC LIMIT 20").fetchall()
-    conn.close()
-    return render_template(
-        "admin.html",
-        licenses=get_all_licenses(),
-        master_email=get_setting("master_email", ""),
-        master_linked=bool(get_secret_setting("master_ssid")),
-        master_pct=get_setting("master_percentage", "10"),
-        master_acct=get_setting("master_account_type", "demo"),
-        total_users=total_users,
-        active_copy=active_copy,
-        active_auto=active_auto,
-        users_list=[dict(u) for u in users_list],
-        logs=[dict(l) for l in logs],
-        otc_assets=OTC_ASSETS,
-        real_assets=REAL_ASSETS,
-        expiry_options=EXPIRY_OPTIONS,
-        key_duration_options=KEY_DURATION_OPTIONS,
-    )
-
-@app.route("/admin/create_key", methods=["POST"])
-@admin_required
-def admin_create_key():
-    try: hours = int(request.form.get("hours", 24))
-    except ValueError: hours = 24
-    result = generate_key(hours)
-    if result["success"]: flash(f"✅ المفتاح: {result['key']}", "success")
-    else: flash(f"❌ فشل: {result['error']}", "error")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/delete_key", methods=["POST"])
-@admin_required
-def admin_delete_key():
-    key = request.form.get("key", "")
-    user = get_user(key)
-    delete_key(key)
-    if user: clear_user_cache(user["id"])
-    flash("تم الحذف", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/toggle_key", methods=["POST"])
-@admin_required
-def admin_toggle_key():
-    key = request.form.get("key", "")
-    if request.form.get("action") == "activate":
-        reactivate_key(key)
-        flash("تم التفعيل", "success")
-    else:
-        deactivate_key(key)
-        flash("تم الإيقاف المؤقت", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/reset_device", methods=["POST"])
-@admin_required
-def admin_reset_device():
-    reset_device(request.form.get("key", ""))
-    flash("تم إعادة تعيين الجهاز", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/clear_master", methods=["POST"])
-@admin_required
-def admin_clear_master():
-    set_secret_setting("master_ssid", "")
-    set_secret_setting("master_cookies", "")
-    set_setting("master_email", "")
-    copy_manager.master_client = None
-    flash("تم فصل حساب المشرف", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/save_master_settings", methods=["POST"])
-@admin_required
-def admin_save_master_settings():
-    try: pct = float(request.form.get("master_pct", 10))
-    except ValueError: pct = 10
-    acct = request.form.get("master_account_type", "demo")
-    if acct not in ("demo", "live"): acct = "demo"
-    set_setting("master_percentage", str(pct))
-    set_setting("master_account_type", acct)
-    flash("✅ تم الحفظ", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/logout")
-def admin_logout():
-    session.pop("is_admin", None)
-    return redirect(url_for("admin"))
-
-if __name__ == "__main__":
-    copy_manager.start_background_loop()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), threaded=True)
+        p = data
+    
+    asset = p.get("asset") or p.get("symbol") or p.get("instrument") or
