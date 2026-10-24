@@ -46,7 +46,6 @@ STATS_TTL = 120
 
 
 def _read_session_file(email):
-    """قراءة الجلسة من الملف الذي تنشئه المكتبة تلقائياً"""
     folders = [os.getcwd()]
     try:
         import pyquotex
@@ -58,12 +57,10 @@ def _read_session_file(email):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                # البحث عن الجلسة بالبريد الإلكتروني
                 if email and isinstance(data, dict):
                     entry = data.get(email) or {}
                     if entry.get("token"):
                         return entry.get("cookies"), entry.get("token")
-                # أو البحث عن أي جلسة صالحة
                 for k, v in data.items():
                     if isinstance(v, dict) and v.get("token"):
                         return v.get("cookies"), v.get("token")
@@ -73,11 +70,9 @@ def _read_session_file(email):
 
 
 def _extract_ssid_string(obj):
-    """استخراج نص SSID بطريقة آمنة، مع رفض أي تمثيل نصي للكائنات"""
     if obj is None:
         return None
     if isinstance(obj, str):
-        # رفض تمثيل الكائنات
         if obj.startswith('<') and 'object at 0x' in obj:
             return None
         return obj
@@ -86,7 +81,6 @@ def _extract_ssid_string(obj):
             return obj.decode('utf-8')
         except:
             return None
-    # محاولة خصائص شائعة
     for attr in ('value', 'token', 'ssid', 'session', 'string', 'text'):
         try:
             if hasattr(obj, attr):
@@ -97,7 +91,6 @@ def _extract_ssid_string(obj):
                     return val.decode('utf-8')
         except:
             pass
-    # لا نرجع str(obj) أبداً - هذا ما سبب المشكلة سابقاً
     return None
 
 
@@ -275,51 +268,28 @@ class QuotexCopyManager:
                 if not check:
                     await self._safe_close(client)
                     continue
-                
-                # انتظار لحفظ الجلسة
-                await asyncio.sleep(2)
-                
-                ssid = None
-                cookies = None
-                
-                # المحاولة 1: من الذاكرة
-                api = getattr(client, 'api', None)
+                ssid, cookies = None, None
+                api = getattr(client, "api", None)
                 for holder in (client, api):
-                    if holder is None:
-                        continue
-                    sd = getattr(holder, 'session_data', None)
+                    sd = getattr(holder, "session_data", None)
                     if isinstance(sd, dict):
-                        cookies = cookies or sd.get('cookies')
-                        ssid = ssid or sd.get('token') or sd.get('ssid')
-                
-                if not ssid and api:
-                    ssid = _extract_ssid_string(getattr(api, 'ssid', None))
+                        cookies = cookies or sd.get("cookies")
+                        ssid = ssid or sd.get("token") or sd.get("ssid")
                 if not ssid:
-                    ssid = _extract_ssid_string(getattr(client, 'ssid', None))
+                    ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
                 
-                # المحاولة 2: من ملف الجلسة
-                if not ssid:
-                    print("[LOGIN] Trying session file fallback...", flush=True)
-                    file_cookies, file_ssid = _read_session_file(email)
-                    ssid = ssid or file_ssid
-                    cookies = cookies or file_cookies
+                ssid = _extract_ssid_string(ssid)
                 
                 await self._safe_close(client)
-                
-                # التحقق النهائي
-                if ssid and len(ssid) > 20 and not ssid.startswith('<'):
-                    print(f"[LOGIN] ✅ Got valid SSID: {ssid[:20]}...", flush=True)
+                if ssid:
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
-                
-                print(f"[LOGIN] ❌ Failed to extract valid SSID", flush=True)
-                return {"success": False, "error": "لم نستطع استخراج جلسة صالحة من الحساب. تأكد من البريد وكلمة المرور."}
-                
+                return {"success": False, "error": "تم الدخول لكن لم نستطع قراءة SSID"}
             except asyncio.TimeoutError:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
                 print(f"login error: {e}", flush=True)
-        return {"success": False, "error": "فشل تسجيل الدخول - تحقق من البيانات"}
+        return {"success": False, "error": "فشل تسجيل الدخول، تأكد من البيانات أو استخدم شبكة أخرى"}
 
     async def test_session(self, ssid, cookies=None):
         client, extracted_ssid, msg = await self._connect_any_host(ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20])
@@ -335,7 +305,6 @@ class QuotexCopyManager:
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
         
-        # تجاهل SSID التالف
         if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
             print(f"[MASTER] ⚠️ Detected corrupt SSID, ignoring: {ssid[:40]}", flush=True)
             ssid = None
@@ -586,23 +555,35 @@ class QuotexCopyManager:
         )
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
-    async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER"):
-        ok, msg = await self.connect_master()
-        if not ok: return {"success": False, "error": msg}
-        balance = await self._get_balance(self.master_client)
-        if balance <= 0: return {"success": False, "error": "لا يوجد رصيد"}
-        master_amount = max(1.0, round(balance * (master_pct / 100.0), 2))
-        master = await self.open_master_trade(asset, direction, master_amount, expiry, time_mode)
-        if not master["success"]: return master
-        actual_asset = master.get("actual_asset", asset)
+    async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER", skip_master=False):
+        """
+        نسخ صفقة إلى المتابعين.
+        إذا skip_master=True، لا تفتح صفقة على حساب الماستر (لأنها فُتحت بالفعل).
+        """
+        if not skip_master:
+            ok, msg = await self.connect_master()
+            if not ok: return {"success": False, "error": msg}
+            balance = await self._get_balance(self.master_client)
+            if balance <= 0: return {"success": False, "error": "لا يوجد رصيد"}
+            master_amount = max(1.0, round(balance * (master_pct / 100.0), 2))
+            master = await self.open_master_trade(asset, direction, master_amount, expiry, time_mode)
+            if not master["success"]: return master
+            actual_asset = master.get("actual_asset", asset)
+            order_id = master["order_id"]
+            amount_used = master_amount
+        else:
+            actual_asset = asset
+            order_id = "realtime_browser"
+            amount_used = master_pct
+
         followers = self._active_copy_followers()
         copied = await self._copy_all(followers, actual_asset, direction, expiry, time_mode) if followers else 0
-        self._log_trade(actual_asset, direction, master_amount, expiry, master["order_id"], copied)
+        self._log_trade(actual_asset, direction, amount_used, expiry, order_id, copied)
         if followers:
             self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
         return {
-            "success": True, "master_order_id": master["order_id"],
-            "master_amount": master_amount, "actual_asset": actual_asset,
+            "success": True, "master_order_id": order_id,
+            "master_amount": amount_used, "actual_asset": actual_asset,
             "copied_count": copied, "total_followers": len(followers),
         }
 
