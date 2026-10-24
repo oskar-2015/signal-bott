@@ -6,11 +6,47 @@ import time
 import asyncio
 import threading
 
+# ═══════════════════════════════════════════════════════════════
+# 🔧 PATCH: إجبار مكتبة pyquotex على استخدام دومين quotex.com
+# ═══════════════════════════════════════════════════════════════
+def _patch_pyquotex_domain():
+    try:
+        import pyquotex.ws.client as ws_client
+        _orig_init = ws_client.WebsocketClient.__init__
+        def _new_init(self, *args, **kwargs):
+            _orig_init(self, *args, **kwargs)
+            for attr in ('url', 'ws_url', 'socket_url'):
+                if hasattr(self, attr):
+                    val = getattr(self, attr)
+                    if isinstance(val, str) and 'qxbroker.com' in val:
+                        setattr(self, attr, val.replace('qxbroker.com', 'quotex.com'))
+        ws_client.WebsocketClient.__init__ = _new_init
+        print("[PATCH WS] ✅ Domain patched to quotex.com", flush=True)
+    except Exception as e:
+        print(f"[PATCH WS] ❌ {e}", flush=True)
+
+    try:
+        import pyquotex.api as api_mod
+        _orig_api_init = api_mod.WebsocketClient.__init__
+        def _new_api_init(self, *args, **kwargs):
+            _orig_api_init(self, *args, **kwargs)
+            for attr in ('url', 'ws_url', 'socket_url'):
+                if hasattr(self, attr):
+                    val = getattr(self, attr)
+                    if isinstance(val, str) and 'qxbroker.com' in val:
+                        setattr(self, attr, val.replace('qxbroker.com', 'quotex.com'))
+        api_mod.WebsocketClient.__init__ = _new_api_init
+    except Exception:
+        pass
+
+_patch_pyquotex_domain()
+
 from pyquotex.stable_api import Quotex
 from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
+# ─── Configuration ───────────────────────────────────────────
 HOSTS_TO_TRY = ["quotex.com", "quotex.io", "qxbroker.com"]
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -248,7 +284,7 @@ class QuotexCopyManager:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
-                print(f"login error: {e}")
+                print(f"login error: {e}", flush=True)
         return {"success": False, "error": "فشل تسجيل الدخول، تأكد من البيانات أو استخدم شبكة أخرى"}
 
     async def test_session(self, ssid, cookies=None):
