@@ -122,6 +122,12 @@
                     ✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}
                 </p>
             {% endif %}
+            {% if master_linked %}
+            <form action="/admin/clear_master" method="POST" style="margin-bottom: 15px;"
+                  onsubmit="return confirm('سيتم فصل حساب المشرف. متأكد؟');">
+                <button type="submit" class="btn-danger">🗑️ فصل حساب المشرف</button>
+            </form>
+            {% endif %}
             <details {% if not master_linked %}open{% endif %}>
                 <summary>{% if master_linked %}تحديث الربط{% else %}ربط الحساب{% endif %}</summary>
                 <form action="/admin/set_master" method="POST" class="slow">
