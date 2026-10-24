@@ -400,7 +400,15 @@ def admin_reset_device():
 
 @app.route("/admin/set_master", methods=["POST"])
 @admin_required
-def admin_set_master():
+def admin_set_master():@app.route("/admin/clear_master", methods=["POST"])
+@admin_required
+def admin_clear_master():
+    set_secret_setting("master_ssid", "")
+    set_secret_setting("master_cookies", "")
+    set_setting("master_email", "")
+    copy_manager.master_client = None
+    flash("تم فصل حساب المشرف", "success")
+    return redirect(url_for("admin_panel"))
     email = request.form.get("master_email", "").strip()
     password = request.form.get("master_password", "").strip()
     ssid = request.form.get("master_ssid", "").strip()
