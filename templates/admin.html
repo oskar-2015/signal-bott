@@ -19,6 +19,7 @@
             {% endfor %}
         {% endwith %}
 
+        <!-- الإحصائيات -->
         <div class="stats-grid" style="grid-template-columns: 1fr 1fr 1fr;">
             <div class="stat-box">
                 <span class="stat-number">{{ total_users }}</span>
@@ -34,7 +35,42 @@
             </div>
         </div>
 
-        <div class="card highlight">
+        <!-- التحكم العام -->
+        <div class="card highlight" style="border-color: #d4af37;">
+            <h3>⚡ التحكم العام (Global Controls)</h3>
+            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                
+                <!-- زر التداول الآلي -->
+                <form action="/admin/toggle_auto_trading" method="POST" style="flex: 1; min-width: 200px;">
+                    <button type="submit" class="{% if admin_auto_enabled %}btn-success{% else %}btn-danger{% endif %}" 
+                            style="width: 100%; padding: 20px; font-size: 16px;"
+                            onclick="return confirm('{% if admin_auto_enabled %}سيتم إيقاف التداول الآلي عن جميع المستخدمين وإبلاغهم. متأكد؟{% else %}سيتم السماح للمستخدمين بتفعيل التداول الآلي. متأكد؟{% endif %}');">
+                        {% if admin_auto_enabled %}
+                            🤖 التداول الآلي: مفعّل (اضغط للإيقاف)
+                        {% else %}
+                            🚫 التداول الآلي: معطّل (اضغط للتفعيل)
+                        {% endif %}
+                    </button>
+                </form>
+
+                <!-- زر بوت التلجرام -->
+                <form action="/admin/toggle_telegram_bot" method="POST" style="flex: 1; min-width: 200px;">
+                    <button type="submit" class="{% if admin_bot_enabled %}btn-success{% else %}btn-danger{% endif %}" 
+                            style="width: 100%; padding: 20px; font-size: 16px;"
+                            onclick="return confirm('{% if admin_bot_enabled %}سيتم إيقاف إرسال الإشارات إلى تلجرام. متأكد؟{% else %}سيتم تفعيل إرسال الإشارات إلى تلجرام. متأكد؟{% endif %}');">
+                        {% if admin_bot_enabled %}
+                            📢 بوت تلجرام: مفعّل (اضغط للإيقاف)
+                        {% else %}
+                            🔕 بوت تلجرام: معطّل (اضغط للتفعيل)
+                        {% endif %}
+                    </button>
+                </form>
+
+            </div>
+        </div>
+
+        <!-- إنشاء مفتاح -->
+        <div class="card">
             <h3>➕ إنشاء مفتاح تفعيل</h3>
             <form action="/admin/create_key" method="POST">
                 <select name="hours">
@@ -46,6 +82,7 @@
             </form>
         </div>
 
+        <!-- جدول المفاتيح -->
         <div class="card">
             <h3>📋 المفاتيح</h3>
             {% if licenses %}
@@ -89,7 +126,7 @@
                                 <input type="hidden" name="key" value="{{ lic.key }}">
                                 {% if lic.is_active %}
                                     <input type="hidden" name="action" value="deactivate">
-                                    <button type="submit" class="btn-small btn-warning">إيقاف مؤقت</button>
+                                    <button type="submit" class="btn-small btn-warning" onclick="return confirm('سيتم إيقاف المفتاح مؤقتاً وطرد المستخدم. متأكد؟');">إيقاف مؤقت</button>
                                 {% else %}
                                     <input type="hidden" name="action" value="activate">
                                     <button type="submit" class="btn-small btn-success">تفعيل</button>
@@ -111,6 +148,7 @@
             {% endif %}
         </div>
 
+        <!-- حساب المشرف (بدون إعدادات نسبة أو حفظ) -->
         <div class="card {% if not master_linked %}highlight{% endif %}">
             <h3>👑 حساب المشرف (الماستر)</h3>
             {% if master_linked %}
@@ -127,19 +165,9 @@
                     يرجى فتح <strong>تطبيق المدير</strong>، والذهاب إلى تبويب <strong>"السوق"</strong>، وتسجيل الدخول هناك لربط الحساب تلقائياً.
                 </p>
             {% endif %}
-
-            <form action="/admin/save_master_settings" method="POST">
-                <label class="field-label">النسبة من رصيد المشرف (%)</label>
-                <input type="number" name="master_pct" step="0.1" min="0.1" max="100" value="{{ master_pct }}" required>
-                <label class="field-label">نوع حساب المشرف</label>
-                <select name="master_account_type">
-                    <option value="demo" {% if master_acct == 'demo' %}selected{% endif %}>تجريبي</option>
-                    <option value="live" {% if master_acct == 'live' %}selected{% endif %}>حقيقي</option>
-                </select>
-                <button type="submit">حفظ الإعدادات</button>
-            </form>
         </div>
 
+        <!-- المستخدمون -->
         <div class="card">
             <h3>👥 المستخدمون</h3>
             <div class="table-wrap">
@@ -168,6 +196,39 @@
             </div>
         </div>
 
+        <!-- سجل الصفقات -->
+        <div class="card">
+            <h3>📜 آخر الصفقات المنسوخة</h3>
+            {% if logs %}
+            <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>الأصل</th>
+                        <th>الاتجاه</th>
+                        <th>المبلغ</th>
+                        <th>المنسوخون</th>
+                        <th>الوقت</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.asset }}</td>
+                        <td>{{ log.direction|upper }}</td>
+                        <td>{% if log.amount %}${{ "%.2f"|format(log.amount) }}{% else %}—{% endif %}</td>
+                        <td>{{ log.follower_count }}</td>
+                        <td style="font-size: 11px;">{{ log.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+                <p style="text-align: center; color: #666;">لا توجد صفقات بعد</p>
+            {% endif %}
+        </div>
+
         <a href="/admin/logout" class="logout">تسجيل خروج</a>
     </div>
     <script>
@@ -184,13 +245,6 @@
                 alert('انسخ المفتاح يدوياً: ' + text);
             });
         }
-
-        document.querySelectorAll('form.slow').forEach(function (f) {
-            f.addEventListener('submit', function () {
-                const b = f.querySelector('button[type=submit]');
-                if (b) setTimeout(function () { b.disabled = true; b.textContent = 'جاري التنفيذ...'; }, 50);
-            });
-        });
     </script>
 </body>
 </html>
