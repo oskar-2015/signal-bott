@@ -237,7 +237,7 @@ def api_app_unlink(key):
     if user: clear_user_cache(user["id"])
     return jsonify({"ok": True})
 
-# ==================== API لربط الماستر من تطبيق المدير ====================
+# ==================== API للماستر ====================
 
 @app.route("/api/admin/link_master", methods=["POST"])
 def api_admin_link_master():
@@ -260,6 +260,31 @@ def api_admin_link_master():
     set_secret_setting("master_ssid", final_ssid)
     set_secret_setting("master_cookies", cookies)
     return jsonify({"ok": True})
+
+@app.route("/api/admin/realtime_trade", methods=["POST"])
+def api_admin_realtime_trade():
+    data = request.get_json(silent=True) or {}
+    asset = str(data.get("asset", "")).strip()
+    direction = str(data.get("direction", "")).strip()
+    amount = float(data.get("amount", 0))
+    expiry = int(data.get("expiry", 60))
+    
+    if not asset or direction not in ("call", "put"):
+        return jsonify({"ok": False, "error": "بيانات غير صالحة"}), 400
+        
+    try:
+        # تنفيذ الصفقة للمتابعين فقط (skip_master=True) لأن الصفقة تمت بالفعل من المتصفح
+        result = copy_manager.run_async(
+            copy_manager.broadcast_trade(asset, direction, amount, expiry, "TIMER", skip_master=True),
+            timeout=300
+        )
+    except Exception as e:
+        result = {"success": False, "error": str(e)}
+        
+    if result.get("success"):
+        return jsonify({"ok": True, "copied": result.get("copied_count", 0), "total": result.get("total_followers", 0)})
+    else:
+        return jsonify({"ok": False, "error": result.get("error", "فشل النسخ")}), 400
 
 # ==================== نقاط النهاية القديمة للويب ====================
 
@@ -441,27 +466,6 @@ def admin_save_master_settings():
     set_setting("master_percentage", str(pct))
     set_setting("master_account_type", acct)
     flash("✅ تم الحفظ", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/open_trade", methods=["POST"])
-@admin_required
-def admin_open_trade():
-    asset = request.form.get("asset", "EURUSD_otc")
-    direction = request.form.get("direction", "call")
-    if direction not in ("call", "put"): direction = "call"
-    try: expiry = int(request.form.get("expiry", 60))
-    except ValueError: expiry = 60
-    time_mode = request.form.get("time_mode", "TIMER")
-    try: master_pct = float(get_setting("master_percentage", "10"))
-    except ValueError: master_pct = 10.0
-    try:
-        result = copy_manager.run_async(copy_manager.broadcast_trade(asset, direction, master_pct, expiry, time_mode), timeout=300)
-    except Exception as e:
-        result = {"success": False, "error": str(e)}
-    if result.get("success"):
-        flash(f"✅ نُسخت إلى {result.get('copied_count', 0)} من {result.get('total_followers', 0)}", "success")
-    else:
-        flash(f"❌ {result.get('error', 'خطأ')}", "error")
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/logout")
