@@ -40,6 +40,19 @@ def _read_session_file(email):
     return None, None
 
 
+def _extract_ssid_string(obj):
+    """دالة مساعدة لاستخراج نص SSID من أي كائن ترجعه المكتبة"""
+    if not obj:
+        return None
+    if isinstance(obj, str):
+        return obj
+    if hasattr(obj, 'token'):
+        return str(obj.token)
+    if hasattr(obj, 'value'):
+        return str(obj.value)
+    return str(obj)
+
+
 class QuotexCopyManager:
     def __init__(self):
         self.master_client = None
@@ -149,6 +162,9 @@ class QuotexCopyManager:
                                     extracted = api.ssid
                         except Exception:
                             pass
+                    
+                    extracted = _extract_ssid_string(extracted)
+                    
                     if user_id is not None:
                         self._fail_count[user_id] = 0
                     return client, extracted, "OK"
@@ -204,9 +220,8 @@ class QuotexCopyManager:
                 try:
                     check, reason = await asyncio.wait_for(client.connect(), timeout=60)
                 except AttributeError as e:
-                    # حل مشكلة pyquotex 'Response' object has no attribute 'reason_phrase'
                     if "reason_phrase" in str(e):
-                        check, reason = True, "OK" # افترض النجاح
+                        check, reason = True, "OK"
                     else:
                         raise e
                 
@@ -222,6 +237,9 @@ class QuotexCopyManager:
                         ssid = ssid or sd.get("token") or sd.get("ssid")
                 if not ssid:
                     ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
+                
+                ssid = _extract_ssid_string(ssid)
+                
                 await self._safe_close(client)
                 if ssid:
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
@@ -239,7 +257,7 @@ class QuotexCopyManager:
             return {"success": False, "error": msg}
         try:
             balance = await self._get_balance(client)
-            return {"success": True, "balance": balance, "ssid": extracted_ssid or ssid or ""}
+            return {"success": True, "balance": balance, "ssid": _extract_ssid_string(extracted_ssid) or ssid or ""}
         finally:
             await self._safe_close(client)
 
