@@ -8,11 +8,10 @@ import asyncio
 import threading
 
 # ═══════════════════════════════════════════════════════════════
-# 🔧 PATCH: إجبار مكتبة pyquotex على استخدام دومين quotex.com
+# PATCH: إجبار مكتبة pyquotex على استخدام دومين quotex.com
 # ═══════════════════════════════════════════════════════════════
 def _patch_pyquotex_domain():
     try:
-        # استبدال أي نص يحتوي على qxbroker داخل جميع وحدات pyquotex
         for module_name in list(sys.modules.keys()):
             if module_name.startswith('pyquotex'):
                 mod = sys.modules[module_name]
@@ -29,9 +28,6 @@ def _patch_pyquotex_domain():
 
 _patch_pyquotex_domain()
 
-# ═══════════════════════════════════════════════════════════════
-# 🔧 إضافة NO_PROXY لتجنب تداخل خوادم البروكسي
-# ═══════════════════════════════════════════════════════════════
 os.environ['NO_PROXY'] = '127.0.0.1,localhost'
 os.environ['no_proxy'] = '127.0.0.1,localhost'
 
@@ -40,7 +36,6 @@ from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-# ─── Configuration ───────────────────────────────────────────
 HOSTS_TO_TRY = ["quotex.com"] 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -51,6 +46,7 @@ STATS_TTL = 120
 
 
 def _read_session_file(email):
+    """قراءة الجلسة من الملف الذي تنشئه المكتبة تلقائياً"""
     folders = [os.getcwd()]
     try:
         import pyquotex
@@ -62,24 +58,47 @@ def _read_session_file(email):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                entry = data.get(email) or {}
-                if entry.get("token"):
-                    return entry.get("cookies"), entry.get("token")
+                # البحث عن الجلسة بالبريد الإلكتروني
+                if email and isinstance(data, dict):
+                    entry = data.get(email) or {}
+                    if entry.get("token"):
+                        return entry.get("cookies"), entry.get("token")
+                # أو البحث عن أي جلسة صالحة
+                for k, v in data.items():
+                    if isinstance(v, dict) and v.get("token"):
+                        return v.get("cookies"), v.get("token")
             except Exception:
                 continue
     return None, None
 
 
 def _extract_ssid_string(obj):
-    if not obj:
+    """استخراج نص SSID بطريقة آمنة، مع رفض أي تمثيل نصي للكائنات"""
+    if obj is None:
         return None
     if isinstance(obj, str):
+        # رفض تمثيل الكائنات
+        if obj.startswith('<') and 'object at 0x' in obj:
+            return None
         return obj
-    if hasattr(obj, 'token'):
-        return str(obj.token)
-    if hasattr(obj, 'value'):
-        return str(obj.value)
-    return str(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        try:
+            return obj.decode('utf-8')
+        except:
+            return None
+    # محاولة خصائص شائعة
+    for attr in ('value', 'token', 'ssid', 'session', 'string', 'text'):
+        try:
+            if hasattr(obj, attr):
+                val = getattr(obj, attr)
+                if isinstance(val, str) and val and not (val.startswith('<') and 'object at 0x' in val):
+                    return val
+                if isinstance(val, (bytes, bytearray)):
+                    return val.decode('utf-8')
+        except:
+            pass
+    # لا نرجع str(obj) أبداً - هذا ما سبب المشكلة سابقاً
+    return None
 
 
 class QuotexCopyManager:
@@ -177,7 +196,7 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
-                print(f"  [TRY] {host} (ssid={str(ssid)[:10] if ssid else 'none'}...)", flush=True)
+                print(f"  [TRY] {host} (ssid={str(ssid)[:15] if ssid else 'none'}...)", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
@@ -256,28 +275,51 @@ class QuotexCopyManager:
                 if not check:
                     await self._safe_close(client)
                     continue
-                ssid, cookies = None, None
-                api = getattr(client, "api", None)
-                for holder in (client, api):
-                    sd = getattr(holder, "session_data", None)
-                    if isinstance(sd, dict):
-                        cookies = cookies or sd.get("cookies")
-                        ssid = ssid or sd.get("token") or sd.get("ssid")
-                if not ssid:
-                    ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
                 
-                ssid = _extract_ssid_string(ssid)
+                # انتظار لحفظ الجلسة
+                await asyncio.sleep(2)
+                
+                ssid = None
+                cookies = None
+                
+                # المحاولة 1: من الذاكرة
+                api = getattr(client, 'api', None)
+                for holder in (client, api):
+                    if holder is None:
+                        continue
+                    sd = getattr(holder, 'session_data', None)
+                    if isinstance(sd, dict):
+                        cookies = cookies or sd.get('cookies')
+                        ssid = ssid or sd.get('token') or sd.get('ssid')
+                
+                if not ssid and api:
+                    ssid = _extract_ssid_string(getattr(api, 'ssid', None))
+                if not ssid:
+                    ssid = _extract_ssid_string(getattr(client, 'ssid', None))
+                
+                # المحاولة 2: من ملف الجلسة
+                if not ssid:
+                    print("[LOGIN] Trying session file fallback...", flush=True)
+                    file_cookies, file_ssid = _read_session_file(email)
+                    ssid = ssid or file_ssid
+                    cookies = cookies or file_cookies
                 
                 await self._safe_close(client)
-                if ssid:
+                
+                # التحقق النهائي
+                if ssid and len(ssid) > 20 and not ssid.startswith('<'):
+                    print(f"[LOGIN] ✅ Got valid SSID: {ssid[:20]}...", flush=True)
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
-                return {"success": False, "error": "تم الدخول لكن لم نستطع قراءة SSID"}
+                
+                print(f"[LOGIN] ❌ Failed to extract valid SSID", flush=True)
+                return {"success": False, "error": "لم نستطع استخراج جلسة صالحة من الحساب. تأكد من البريد وكلمة المرور."}
+                
             except asyncio.TimeoutError:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
                 print(f"login error: {e}", flush=True)
-        return {"success": False, "error": "فشل تسجيل الدخول، تأكد من البيانات أو استخدم شبكة أخرى"}
+        return {"success": False, "error": "فشل تسجيل الدخول - تحقق من البيانات"}
 
     async def test_session(self, ssid, cookies=None):
         client, extracted_ssid, msg = await self._connect_any_host(ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20])
@@ -292,8 +334,15 @@ class QuotexCopyManager:
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
+        
+        # تجاهل SSID التالف
+        if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
+            print(f"[MASTER] ⚠️ Detected corrupt SSID, ignoring: {ssid[:40]}", flush=True)
+            ssid = None
+        
         if not ssid and not cookies:
-            return False, "لم يُربط حساب المشرف"
+            return False, "لم يُربط حساب المشرف - يرجى إعادة الربط"
+        
         if self.master_client:
             await self._safe_close(self.master_client)
             self.master_client = None
@@ -310,8 +359,10 @@ class QuotexCopyManager:
 
     async def get_user_stats(self, user):
         ssid, cookies = get_session_plain(user)
+        if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
+            ssid = None
         if not ssid and not cookies:
-            return {"ok": False, "error": "لا توجد جلسة"}
+            return {"ok": False, "error": "لا توجد جلسة صالحة"}
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user.get("id"))
         if client is None:
             return {"ok": False, "error": f"فشل الاتصال: {msg}"}
@@ -440,6 +491,8 @@ class QuotexCopyManager:
 
     async def copy_to_follower(self, follower, asset, direction, expiry, time_mode):
         ssid, cookies = get_session_plain(follower)
+        if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
+            ssid = None
         if not ssid and not cookies:
             return {"success": False, "error": "لا توجد جلسة"}
         user_id = follower["id"]
