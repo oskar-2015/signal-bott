@@ -237,7 +237,15 @@ def api_app_unlink(key):
     if user: clear_user_cache(user["id"])
     return jsonify({"ok": True})
 
-# ==================== API للماستر ====================
+# ==================== API لربط الماستر والنسخ الفوري ====================
+
+@app.route("/api/admin/is_linked")
+def api_admin_is_linked():
+    ssid = get_secret_setting("master_ssid")
+    return jsonify({
+        "linked": bool(ssid and not (ssid.startswith('<') or 'object at 0x' in ssid)),
+        "account_type": get_setting("master_account_type", "demo"),
+    })
 
 @app.route("/api/admin/link_master", methods=["POST"])
 def api_admin_link_master():
@@ -268,19 +276,24 @@ def api_admin_realtime_trade():
     direction = str(data.get("direction", "")).strip()
     amount = float(data.get("amount", 0))
     expiry = int(data.get("expiry", 60))
-    
+
+    print(f"[REALTIME] Received trade: {asset} {direction} ${amount} ({expiry}s)", flush=True)
+
     if not asset or direction not in ("call", "put"):
         return jsonify({"ok": False, "error": "بيانات غير صالحة"}), 400
-        
+
     try:
-        # تنفيذ الصفقة للمتابعين فقط (skip_master=True) لأن الصفقة تمت بالفعل من المتصفح
+        # skip_master=True لأن الصفقة نُفذت بالفعل من المتصفح
         result = copy_manager.run_async(
             copy_manager.broadcast_trade(asset, direction, amount, expiry, "TIMER", skip_master=True),
             timeout=300
         )
     except Exception as e:
+        print(f"[REALTIME] Exception: {e}", flush=True)
         result = {"success": False, "error": str(e)}
-        
+
+    print(f"[REALTIME] Result: copied={result.get('copied_count')} total={result.get('total_followers')}", flush=True)
+
     if result.get("success"):
         return jsonify({"ok": True, "copied": result.get("copied_count", 0), "total": result.get("total_followers", 0)})
     else:
