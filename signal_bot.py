@@ -13,6 +13,7 @@ from pyquotex.stable_api import Quotex
 
 from app import app as web_app
 from quotex_manager import copy_manager
+from database import get_setting
 
 try:
     from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -151,7 +152,7 @@ def send_telegram(asset, direction, entry_time, duration_min):
             "text": text,
             "parse_mode": "HTML"
         }, timeout=15)
-        print(f"sent: {asset} {direction}")
+        print(f"sent to telegram: {asset} {direction}")
     except Exception as e:
         print(f"telegram error: {e}")
 
@@ -161,7 +162,6 @@ async def connect_client():
     if not cookies_str or not ssid:
         print("no session data available")
         return None
-    # ⚠️ تم تصحيح الدومين: quotex.com بدلاً من quotex.io
     client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.com")
     client.set_session(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -261,6 +261,7 @@ async def main_loop():
             consecutive_failures = 0
             cycle += 1
             print(f"cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
+            
             top_assets = await get_top_open_assets(client)
             if not top_assets:
                 print("no open assets this cycle")
@@ -277,12 +278,21 @@ async def main_loop():
             print(f"best: {asset} payout={payout} strength={strength:.2f} dir={direction}")
 
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
-            send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
+            
+            # 1. إرسال إشارة لتلجرام (إذا كان الزر مفعلاً)
+            if get_setting("admin_bot_enabled", "1") == "1":
+                send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
+            else:
+                print("telegram bot is disabled by admin, skipping send")
 
-            trade_dir = "call" if direction == "up" else "put"
-            copy_manager.submit(copy_manager.broadcast_signal(
-                asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
-            ))
+            # 2. نسخ الصفقة للمستخدمين المفعلين للتداول الآلي (إذا كان الزر مفعلاً)
+            if get_setting("admin_auto_enabled", "1") == "1":
+                trade_dir = "call" if direction == "up" else "put"
+                copy_manager.submit(copy_manager.broadcast_signal(
+                    asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
+                ))
+            else:
+                print("auto trading is disabled by admin, skipping copy")
 
             wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
             print(f"waiting {wait_seconds}s")
@@ -294,16 +304,6 @@ async def main_loop():
             await asyncio.sleep(300)
 
 
-def hold_forever(message_lines):
-    for line in message_lines:
-        print(line)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        print("stopped")
-
-
 if __name__ == "__main__":
     copy_manager.start_background_loop()
     keep_alive()
@@ -311,62 +311,34 @@ if __name__ == "__main__":
     signals_enabled = os.environ.get("ENABLE_SIGNALS", "false").lower() == "true"
 
     if not signals_enabled:
-        hold_forever([
-            "=" * 70,
-            "ℹ️  Signal bot is DISABLED (ENABLE_SIGNALS not set to 'true')",
-            "ℹ️  ✅ Web app + user account connections work normally",
-            "ℹ️  ✅ Android app linking works normally",
-            "ℹ️  To enable signals: add ENABLE_SIGNALS=true in Render env vars",
-            "=" * 70,
-        ])
-        raise SystemExit(0)
-
-    _cookies, _ssid = load_session()
-    if not _cookies or not _ssid:
-        hold_forever([
-            "=" * 70,
-            "⚠️  Signal bot enabled but qx_session.json is missing or invalid!",
-            "⚠️  Bot disabled to avoid rate limiting.",
-            "⚠️  Update qx_session.json and redeploy to enable signals.",
-            "=" * 70,
-        ])
-        raise SystemExit(0)
-
-    print("=" * 70)
-    print("✅ Signal bot is ENABLED - verifying session before starting loop...")
-    print("=" * 70)
-
-    # فحص مسبق: هل الجلسة تعمل فعلاً قبل بدء الحلقة؟
-    try:
-        test_client = asyncio.run(connect_client())
-        if test_client is None:
-            hold_forever([
-                "=" * 70,
-                "⚠️  Session verification FAILED - bot will NOT start",
-                "⚠️  qx_session.json is stale or expired",
-                "⚠️  Update qx_session.json and redeploy",
-                "=" * 70,
-            ])
-            raise SystemExit(0)
-        else:
+        print("=" * 70)
+        print("ℹ️  Signal bot is DISABLED (ENABLE_SIGNALS not set to 'true')")
+        print("ℹ️  ✅ Web app + user account connections work normally")
+        print("ℹ️  ✅ Android app linking works normally")
+        print("ℹ️  To enable signals: add ENABLE_SIGNALS=true in Render env vars")
+        print("=" * 70)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            print("stopped")
+    else:
+        _cookies, _ssid = load_session()
+        if not _cookies or not _ssid:
+            print("=" * 70)
+            print("⚠️  Signal bot enabled but qx_session.json is missing or invalid!")
+            print("⚠️  Bot disabled to avoid rate limiting.")
+            print("=" * 70)
             try:
-                asyncio.run(test_client.close())
-            except Exception:
-                pass
-            print("✅ Session verified successfully")
-    except Exception as e:
-        hold_forever([
-            "=" * 70,
-            f"⚠️  Session verification error: {e}",
-            "⚠️  Bot will NOT start to protect IP",
-            "=" * 70,
-        ])
-        raise SystemExit(0)
-
-    print("=" * 70)
-    print("✅ Signal bot is starting trading loop")
-    print("=" * 70)
-    try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
-        print("stopped")
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                print("stopped")
+        else:
+            print("=" * 70)
+            print("✅ Signal bot is ENABLED - starting trading loop")
+            print("=" * 70)
+            try:
+                asyncio.run(main_loop())
+            except KeyboardInterrupt:
+                print("stopped")
