@@ -198,7 +198,7 @@ def api_app_save_and_enable(key):
     elif trade_value < 1: return jsonify({"ok": False, "error": "المبلغ الثابت 1$ على الأقل"}), 400
     if max_loss_value < 0 or max_profit_value < 0: return jsonify({"ok": False, "error": "القيم يجب أن تكون موجبة"}), 400
 
-    # 🆕 التحقق من حالة تعطيل التداول الآلي من المدير
+    # التحقق من حالة تعطيل التداول الآلي من المدير
     if enable_type == "auto" and get_setting("admin_auto_enabled", "1") != "1":
         return jsonify({"ok": False, "error": "التداول الآلي معطّل من قبل المدير"}), 400
 
@@ -285,12 +285,23 @@ def api_app_clear_notification(key):
 
 @app.route("/api/app/session_stats/<key>")
 def api_app_session_stats(key):
+    """
+    يعرض الرصيد. يدعم معامل ?account=demo|live لعرض رصيد الحساب المحدد
+    قبل التفعيل (عند تغيير المستخدم لنوع الحساب).
+    """
     key = key.strip().upper()
     ok, msg = is_key_valid(key)
     if not ok: return jsonify({"ok": False, "error": msg}), 403
     user = get_user(key)
     if not user or (not user["quotex_ssid"] and not user["quotex_cookies"]):
         return jsonify({"ok": False, "error": "غير مرتبط"}), 400
+
+    # دعم قراءة رصيد حساب معين (قبل التفعيل) - لا يغير المحفوظ في DB
+    requested_account = request.args.get("account", "").strip().lower()
+    if requested_account in ("demo", "live"):
+        user = dict(user)
+        user["account_type"] = requested_account
+
     return jsonify(copy_manager.fetch_stats_sync(user))
 
 
