@@ -114,22 +114,19 @@
         <div class="card {% if not master_linked %}highlight{% endif %}">
             <h3>👑 حساب المشرف (الماستر)</h3>
             {% if master_linked %}
-                <p style="color: #81c784; text-align: center;">
-                    ✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}
+                <p style="color: #81c784; text-align: center; font-size: 16px;">
+                    ✅ الحساب مرتبط
                 </p>
                 <form action="/admin/clear_master" method="POST" style="margin-bottom: 20px;"
                       onsubmit="return confirm('سيتم فصل حساب المشرف الحالي. متأكد؟');">
                     <button type="submit" class="btn-danger">🗑️ فصل حساب المشرف</button>
                 </form>
+            {% else %}
+                <p style="color: #f0e0a0; text-align: center; font-size: 15px; line-height: 1.8;">
+                    ⚠️ الحساب غير مرتبط.<br>
+                    يرجى فتح <strong>تطبيق المدير</strong>، والذهاب إلى تبويب <strong>"السوق"</strong>، وتسجيل الدخول هناك لربط الحساب تلقائياً.
+                </p>
             {% endif %}
-            <details {% if not master_linked %}open{% endif %}>
-                <summary>{% if master_linked %}تحديث الربط{% else %}ربط الحساب{% endif %}</summary>
-                <form action="/admin/set_master" method="POST" class="slow">
-                    <input type="email" name="master_email" placeholder="البريد الإلكتروني" required>
-                    <input type="password" name="master_password" placeholder="كلمة المرور" required>
-                    <button type="submit" class="btn-primary">🔗 ربط</button>
-                </form>
-            </details>
 
             <form action="/admin/save_master_settings" method="POST">
                 <label class="field-label">النسبة من رصيد المشرف (%)</label>
