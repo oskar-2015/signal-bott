@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import glob
 import json
 import time
@@ -11,35 +12,28 @@ import threading
 # ═══════════════════════════════════════════════════════════════
 def _patch_pyquotex_domain():
     try:
-        import pyquotex.ws.client as ws_client
-        _orig_init = ws_client.WebsocketClient.__init__
-        def _new_init(self, *args, **kwargs):
-            _orig_init(self, *args, **kwargs)
-            for attr in ('url', 'ws_url', 'socket_url'):
-                if hasattr(self, attr):
-                    val = getattr(self, attr)
-                    if isinstance(val, str) and 'qxbroker.com' in val:
-                        setattr(self, attr, val.replace('qxbroker.com', 'quotex.com'))
-        ws_client.WebsocketClient.__init__ = _new_init
-        print("[PATCH WS] ✅ Domain patched to quotex.com", flush=True)
+        # استبدال أي نص يحتوي على qxbroker داخل جميع وحدات pyquotex
+        for module_name in list(sys.modules.keys()):
+            if module_name.startswith('pyquotex'):
+                mod = sys.modules[module_name]
+                for attr_name in dir(mod):
+                    try:
+                        attr = getattr(mod, attr_name)
+                        if isinstance(attr, str) and 'qxbroker.com' in attr:
+                            setattr(mod, attr_name, attr.replace('qxbroker.com', 'quotex.com'))
+                    except:
+                        pass
+        print("[PATCH] ✅ Domain globally patched to quotex.com", flush=True)
     except Exception as e:
-        print(f"[PATCH WS] ❌ {e}", flush=True)
-
-    try:
-        import pyquotex.api as api_mod
-        _orig_api_init = api_mod.WebsocketClient.__init__
-        def _new_api_init(self, *args, **kwargs):
-            _orig_api_init(self, *args, **kwargs)
-            for attr in ('url', 'ws_url', 'socket_url'):
-                if hasattr(self, attr):
-                    val = getattr(self, attr)
-                    if isinstance(val, str) and 'qxbroker.com' in val:
-                        setattr(self, attr, val.replace('qxbroker.com', 'quotex.com'))
-        api_mod.WebsocketClient.__init__ = _new_api_init
-    except Exception:
-        pass
+        print(f"[PATCH] ❌ Error: {e}", flush=True)
 
 _patch_pyquotex_domain()
+
+# ═══════════════════════════════════════════════════════════════
+# 🔧 إضافة NO_PROXY لتجنب تداخل خوادم البروكسي
+# ═══════════════════════════════════════════════════════════════
+os.environ['NO_PROXY'] = '127.0.0.1,localhost'
+os.environ['no_proxy'] = '127.0.0.1,localhost'
 
 from pyquotex.stable_api import Quotex
 from database import (
@@ -47,12 +41,12 @@ from database import (
 )
 
 # ─── Configuration ───────────────────────────────────────────
-HOSTS_TO_TRY = ["quotex.com", "quotex.io", "qxbroker.com"]
+HOSTS_TO_TRY = ["quotex.com"] 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-CONNECT_TIMEOUT = 25
+CONNECT_TIMEOUT = 30
 STATS_TTL = 120
 
 
@@ -77,7 +71,6 @@ def _read_session_file(email):
 
 
 def _extract_ssid_string(obj):
-    """دالة مساعدة لاستخراج نص SSID من أي كائن ترجعه المكتبة"""
     if not obj:
         return None
     if isinstance(obj, str):
@@ -184,6 +177,7 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
+                print(f"  [TRY] {host} (ssid={str(ssid)[:10] if ssid else 'none'}...)", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
@@ -203,22 +197,19 @@ class QuotexCopyManager:
                     
                     if user_id is not None:
                         self._fail_count[user_id] = 0
+                    print(f"  ✅ connected via {host}", flush=True)
                     return client, extracted, "OK"
                 last_error = f"{host}: {msg}"
+                print(f"  ❌ {host}: {msg}", flush=True)
                 await self._safe_close(client)
             except asyncio.TimeoutError:
                 last_error = f"{host}: timeout"
+                print(f"  ⏱ {host}: timeout", flush=True)
                 if client:
                     await self._safe_close(client)
-            except RecursionError:
-                last_error = f"{host}: RecursionError"
-                if client:
-                    await self._safe_close(client)
-                if user_id is not None:
-                    self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
-                return None, None, last_error
             except Exception as e:
                 last_error = f"{host}: {type(e).__name__}: {e}"
+                print(f"  ❌ {host}: {type(e).__name__}: {e}", flush=True)
                 if client:
                     await self._safe_close(client)
 
@@ -238,7 +229,8 @@ class QuotexCopyManager:
             await client.change_account(target)
             await asyncio.sleep(1)
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Switch account error: {e}", flush=True)
             return False
 
     async def _get_balance(self, client):
@@ -305,9 +297,12 @@ class QuotexCopyManager:
         if self.master_client:
             await self._safe_close(self.master_client)
             self.master_client = None
+        
+        print(f"Master connecting: ssid={'yes' if ssid else 'no'}, cookies={'yes' if cookies else 'no'}", flush=True)
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id="master")
         if client is None:
             return False, msg
+        
         acct = get_setting("master_account_type", "demo")
         await self._switch_account(client, acct)
         self.master_client = client
@@ -419,8 +414,8 @@ class QuotexCopyManager:
         try:
             result = await self._buy_once(client, asset, direction, amount, expiry, time_mode)
             if result[0]: return (True, result[1], asset)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Buy error: {e}", flush=True)
         if asset.endswith("_otc"):
             alt = asset.replace("_otc", "")
             try:
