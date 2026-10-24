@@ -36,7 +36,7 @@ from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-HOSTS_TO_TRY = ["quotex.com"] 
+HOSTS_TO_TRY = ["quotex.com"]
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -203,9 +203,9 @@ class QuotexCopyManager:
                                     extracted = api.ssid
                         except Exception:
                             pass
-                    
+
                     extracted = _extract_ssid_string(extracted)
-                    
+
                     if user_id is not None:
                         self._fail_count[user_id] = 0
                     return client, extracted, "OK"
@@ -259,16 +259,16 @@ class QuotexCopyManager:
                         check, reason = True, "OK"
                     else:
                         raise e
-                
+
                 if not check:
                     await self._safe_close(client)
                     continue
-                
+
                 await asyncio.sleep(2)
-                
+
                 ssid = None
                 cookies = None
-                
+
                 api = getattr(client, 'api', None)
                 for holder in (client, api):
                     if holder is None: continue
@@ -276,30 +276,30 @@ class QuotexCopyManager:
                     if isinstance(sd, dict):
                         cookies = cookies or sd.get('cookies')
                         ssid = ssid or sd.get('token') or sd.get('ssid')
-                
+
                 if not ssid and api:
                     ssid = _extract_ssid_string(getattr(api, 'ssid', None))
                 if not ssid:
                     ssid = _extract_ssid_string(getattr(client, 'ssid', None))
-                
+
                 if not ssid:
                     fc, fs = _read_session_file(email)
                     ssid = ssid or fs
                     cookies = cookies or fc
-                
+
                 await self._safe_close(client)
-                
+
                 if ssid and len(ssid) > 20 and not ssid.startswith('<'):
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
-                
-                return {"success": False, "error": "لم نستطع استخراج جلسة صالحة من الحساب. تأكد من البريد وكلمة المرور."}
-                
+
+                return {"success": False, "error": "لم نستطع استخراج جلسة صالحة"}
+
             except asyncio.TimeoutError:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
                 print(f"login error: {e}", flush=True)
-        return {"success": False, "error": "فشل تسجيل الدخول - تحقق من البيانات"}
+        return {"success": False, "error": "فشل تسجيل الدخول"}
 
     async def test_session(self, ssid, cookies=None):
         client, extracted_ssid, msg = await self._connect_any_host(ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20])
@@ -314,21 +314,21 @@ class QuotexCopyManager:
     async def connect_master(self):
         ssid = get_secret_setting("master_ssid")
         cookies = get_secret_setting("master_cookies")
-        
+
         if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
             ssid = None
-        
+
         if not ssid and not cookies:
-            return False, "لم يُربط حساب المشرف - يرجى إعادة الربط"
-        
+            return False, "لم يُربط حساب المشرف"
+
         if self.master_client:
             await self._safe_close(self.master_client)
             self.master_client = None
-        
+
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id="master")
         if client is None:
             return False, msg
-        
+
         acct = get_setting("master_account_type", "demo")
         await self._switch_account(client, acct)
         self.master_client = client
@@ -364,7 +364,9 @@ class QuotexCopyManager:
 
     def _check_limits(self, user, balance):
         start = user.get("start_balance")
-        if not start or start <= 0 or (not user.get("is_copying") and not user.get("is_auto_trading")):
+        if not start or start <= 0:
+            return False, ""
+        if not user.get("is_copying") and not user.get("is_auto_trading"):
             return False, ""
         diff = balance - start
         pct = diff / start * 100.0
@@ -390,23 +392,27 @@ class QuotexCopyManager:
     def _stop_trading(self, user_id, notification):
         conn = get_db()
         conn.execute(
-            "UPDATE users SET is_copying = 0, is_auto_trading = 0, last_notification = ?, "
-            "balance_version = balance_version + 1 WHERE id = ?",
+            "UPDATE users SET is_copying = 0, is_auto_trading = 0, settings_locked = 0, "
+            "last_notification = ?, balance_version = balance_version + 1 WHERE id = ?",
             (notification, user_id),
         )
         conn.commit()
         conn.close()
+        print(f"[STOP_LIMIT] user {user_id} stopped: {notification[:60]}", flush=True)
 
     async def refresh_and_notify(self, user):
         try:
             stats = await self.get_user_stats(user)
-            if not stats.get("ok"): return stats
+            if not stats.get("ok"):
+                print(f"[REFRESH] user {user.get('id')} failed: {stats.get('error')}", flush=True)
+                return stats
             stop, note = self._check_limits(user, stats["balance"])
             if stop:
                 self._stop_trading(user["id"], note)
                 stats["is_copying"] = False
                 stats["is_auto_trading"] = False
                 stats["notification"] = note
+                self.clear_cache(user["id"])
             else:
                 conn = get_db()
                 conn.execute("UPDATE users SET balance_version = balance_version + 1 WHERE id = ?", (user["id"],))
@@ -415,22 +421,33 @@ class QuotexCopyManager:
             self.set_cached_stats(user["id"], stats)
             return stats
         except Exception as e:
+            print(f"[REFRESH] user {user.get('id')} exception: {e}", flush=True)
             return {"ok": False, "error": str(e)}
 
     async def _refresh_after_trade(self, delay, license_keys):
         try:
             await asyncio.sleep(delay + 5)
             for key in license_keys:
-                try:
-                    conn = get_db()
-                    row = conn.execute("SELECT * FROM users WHERE license_key = ?", (key,)).fetchone()
-                    conn.close()
-                    if row and row["quotex_ssid"]:
-                        await self.refresh_and_notify(dict(row))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                for attempt in range(3):
+                    try:
+                        conn = get_db()
+                        row = conn.execute("SELECT * FROM users WHERE license_key = ?", (key,)).fetchone()
+                        conn.close()
+                        if not row:
+                            break
+                        user_dict = dict(row)
+                        if not user_dict.get("quotex_ssid"):
+                            break
+                        result = await self.refresh_and_notify(user_dict)
+                        if result.get("ok"):
+                            break
+                        print(f"[REFRESH_RETRY] user {key} attempt {attempt+1} failed, retrying in 30s", flush=True)
+                        await asyncio.sleep(30)
+                    except Exception as e:
+                        print(f"[REFRESH_ERR] {key} attempt {attempt+1}: {e}", flush=True)
+                        await asyncio.sleep(30)
+        except Exception as e:
+            print(f"[REFRESH_AFTER_TRADE] fatal: {e}", flush=True)
 
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
@@ -488,12 +505,11 @@ class QuotexCopyManager:
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user_id)
         if client is None:
             return {"success": False, "error": f"فشل الاتصال: {msg}"}
-            
+
         try:
             await self._switch_account(client, account_type)
             balance = await self._get_balance(client)
-            
-            # احتساب قيمة الصفقة المطلوبة
+
             start_balance = follower.get("start_balance")
             if not start_balance or start_balance <= 0:
                 start_balance = balance
@@ -503,7 +519,7 @@ class QuotexCopyManager:
                 conn.close()
                 follower["start_balance"] = start_balance
 
-            # فحص حدود الربح والخسارة قبل أي صفقة جديدة
+            # ★ فحص حد الربح/الخسارة قبل الصفقة
             stop, note = self._check_limits(follower, balance)
             if stop:
                 self._stop_trading(user_id, note)
@@ -515,11 +531,10 @@ class QuotexCopyManager:
                 amount = tv
             else:
                 amount = round(balance * (tv / 100.0), 2)
-            
+
             if amount < 1:
                 amount = 1.0
 
-            # فحص كفاية الرصيد
             if amount > balance:
                 err_msg = f"⚠️ رصيد غير كافٍ في الحساب ({acct_label}).\nالمطلوب للصفقة: ${amount:.2f}\nالرصيد الحالي: ${balance:.2f}"
                 save_notification(err_msg)
@@ -533,7 +548,7 @@ class QuotexCopyManager:
                 err_msg = f"⚠️ فشل تنفيذ الصفقة على الحساب ({acct_label}).\nالسبب: {info}"
                 save_notification(err_msg)
                 return {"success": False, "error": str(info)}
-                
+
         except Exception as e:
             return {"success": False, "error": str(e)}
         finally:
