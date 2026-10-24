@@ -1,36 +1,22 @@
 # -*- coding: utf-8 -*-
 import os
-import sys
 import glob
 import json
 import time
 import asyncio
 import threading
 
-# ═══════════════════════════════════════════════════════════════
-# حماية إضافية ضد recursion
-# ═══════════════════════════════════════════════════════════════
-sys.setrecursionlimit(10000)
-
-# ═══════════════════════════════════════════════════════════════
-# ⚠️ لا نستخدم أي patch على __init__ بعد الآن
-# السبب: pyquotex 1.1.0 يستخدم quotex.com أصلاً
-# والـ patch كان يسبب RecursionError
-# ═══════════════════════════════════════════════════════════════
-
 from pyquotex.stable_api import Quotex
-
 from database import (
     get_db, get_setting, get_secret_setting, get_session_plain, now_iso,
 )
 
-# ─── Configuration ───────────────────────────────────────────
 HOSTS_TO_TRY = ["quotex.com", "quotex.io", "qxbroker.com"]
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-CONNECT_TIMEOUT = 30
+CONNECT_TIMEOUT = 25
 STATS_TTL = 120
 
 
@@ -149,7 +135,6 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
-                print(f"  [TRY] {host} (ssid={ssid[:15] if ssid else 'none'}...)", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
@@ -164,21 +149,17 @@ class QuotexCopyManager:
                                     extracted = api.ssid
                         except Exception:
                             pass
-                    print(f"  ✅ connected via {host} (ssid: {'yes' if extracted else 'no'})", flush=True)
                     if user_id is not None:
                         self._fail_count[user_id] = 0
                     return client, extracted, "OK"
                 last_error = f"{host}: {msg}"
-                print(f"  ❌ {host}: {msg}", flush=True)
                 await self._safe_close(client)
             except asyncio.TimeoutError:
                 last_error = f"{host}: timeout"
-                print(f"  ⏱ {host}: timeout", flush=True)
                 if client:
                     await self._safe_close(client)
             except RecursionError:
                 last_error = f"{host}: RecursionError (pyquotex bug)"
-                print(f"  ❌ {host}: RecursionError — aborting all retries", flush=True)
                 if client:
                     await self._safe_close(client)
                 if user_id is not None:
@@ -186,7 +167,6 @@ class QuotexCopyManager:
                 return None, None, last_error
             except Exception as e:
                 last_error = f"{host}: {type(e).__name__}: {e}"
-                print(f"  ❌ {host}: {type(e).__name__}: {e}", flush=True)
                 if client:
                     await self._safe_close(client)
 
@@ -206,16 +186,14 @@ class QuotexCopyManager:
             await client.change_account(target)
             await asyncio.sleep(1)
             return True
-        except Exception as e:
-            print(f"  switch account failed: {e}", flush=True)
+        except Exception:
             return False
 
     async def _get_balance(self, client):
         try:
             bal = await client.get_balance()
             return float(bal) if bal else 0.0
-        except Exception as e:
-            print(f"  get_balance error: {e}", flush=True)
+        except Exception:
             return 0.0
 
     async def login_with_credentials(self, email, password):
@@ -227,8 +205,7 @@ class QuotexCopyManager:
                 if not check:
                     await self._safe_close(client)
                     continue
-                ssid = None
-                cookies = None
+                ssid, cookies = None, None
                 api = getattr(client, "api", None)
                 for holder in (client, api):
                     sd = getattr(holder, "session_data", None)
@@ -242,19 +219,10 @@ class QuotexCopyManager:
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
                 return {"success": False, "error": "تم الدخول لكن لم نستطع قراءة SSID"}
             except asyncio.TimeoutError:
-                if client:
-                    await self._safe_close(client)
-                continue
-            except RecursionError:
-                if client:
-                    await self._safe_close(client)
-                return {"success": False, "error": "pyquotex RecursionError — login aborted"}
+                if client: await self._safe_close(client)
             except Exception as e:
-                if client:
-                    await self._safe_close(client)
-                print(f"login attempt {host} failed: {e}", flush=True)
-                continue
-        return {"success": False, "error": "فشل تسجيل الدخول على كل النطاقات"}
+                if client: await self._safe_close(client)
+        return {"success": False, "error": "فشل تسجيل الدخول"}
 
     async def test_session(self, ssid, cookies=None):
         client, extracted_ssid, msg = await self._connect_any_host(
@@ -264,11 +232,7 @@ class QuotexCopyManager:
             return {"success": False, "error": msg}
         try:
             balance = await self._get_balance(client)
-            return {
-                "success": True,
-                "balance": balance,
-                "ssid": extracted_ssid or ssid or "",
-            }
+            return {"success": True, "balance": balance, "ssid": extracted_ssid or ssid or ""}
         finally:
             await self._safe_close(client)
 
@@ -310,12 +274,13 @@ class QuotexCopyManager:
             "ok": True, "balance": round(balance, 2), "start": round(start, 2),
             "diff": round(diff, 2), "pct": round(pct, 2),
             "is_copying": bool(user.get("is_copying")),
+            "is_auto_trading": bool(user.get("is_auto_trading")),
             "notification": user.get("last_notification"),
         }
 
     def _check_limits(self, user, balance):
         start = user.get("start_balance")
-        if not start or start <= 0 or not user.get("is_copying"):
+        if not start or start <= 0 or (not user.get("is_copying") and not user.get("is_auto_trading")):
             return False, ""
         diff = balance - start
         pct = diff / start * 100.0
@@ -338,10 +303,10 @@ class QuotexCopyManager:
             return True, f"🎉 هدف الربح.\n{profit_txt}{tail}"
         return False, ""
 
-    def _stop_copying(self, user_id, notification):
+    def _stop_trading(self, user_id, notification):
         conn = get_db()
         conn.execute(
-            "UPDATE users SET is_copying = 0, last_notification = ?, "
+            "UPDATE users SET is_copying = 0, is_auto_trading = 0, last_notification = ?, "
             "balance_version = balance_version + 1 WHERE id = ?",
             (notification, user_id),
         )
@@ -351,17 +316,16 @@ class QuotexCopyManager:
     async def refresh_and_notify(self, user):
         try:
             stats = await self.get_user_stats(user)
-            if not stats.get("ok"):
-                return stats
+            if not stats.get("ok"): return stats
             stop, note = self._check_limits(user, stats["balance"])
             if stop:
-                self._stop_copying(user["id"], note)
+                self._stop_trading(user["id"], note)
                 stats["is_copying"] = False
+                stats["is_auto_trading"] = False
                 stats["notification"] = note
             else:
                 conn = get_db()
-                conn.execute("UPDATE users SET balance_version = balance_version + 1 WHERE id = ?",
-                             (user["id"],))
+                conn.execute("UPDATE users SET balance_version = balance_version + 1 WHERE id = ?", (user["id"],))
                 conn.commit()
                 conn.close()
             self.set_cached_stats(user["id"], stats)
@@ -386,25 +350,21 @@ class QuotexCopyManager:
 
     async def _buy_once(self, client, asset, direction, amount, expiry, time_mode):
         try:
-            return await client.buy(amount=amount, asset=asset, direction=direction,
-                                    duration=expiry, time_mode=time_mode)
+            return await client.buy(amount=amount, asset=asset, direction=direction, duration=expiry, time_mode=time_mode)
         except TypeError:
-            return await client.buy(amount=amount, asset=asset, direction=direction,
-                                    duration=expiry)
+            return await client.buy(amount=amount, asset=asset, direction=direction, duration=expiry)
 
     async def _buy(self, client, asset, direction, amount, expiry, time_mode="TIMER"):
         try:
             result = await self._buy_once(client, asset, direction, amount, expiry, time_mode)
-            if result[0]:
-                return (True, result[1], asset)
-        except Exception as e:
-            print(f"  buy error: {e}", flush=True)
+            if result[0]: return (True, result[1], asset)
+        except Exception:
+            pass
         if asset.endswith("_otc"):
             alt = asset.replace("_otc", "")
             try:
                 result = await self._buy_once(client, alt, direction, amount, expiry, time_mode)
-                if result[0]:
-                    return (True, result[1], alt)
+                if result[0]: return (True, result[1], alt)
             except Exception:
                 pass
         return (False, "فشلت المحاولات", asset)
@@ -412,13 +372,11 @@ class QuotexCopyManager:
     async def open_master_trade(self, asset, direction, amount, expiry, time_mode):
         if not self.master_client:
             ok, msg = await self.connect_master()
-            if not ok:
-                return {"success": False, "error": msg, "actual_asset": asset}
+            if not ok: return {"success": False, "error": msg, "actual_asset": asset}
         balance = await self._get_balance(self.master_client)
         if balance <= 0:
             return {"success": False, "error": "لا يوجد رصيد", "actual_asset": asset}
-        status, info, actual_asset = await self._buy(
-            self.master_client, asset, direction, amount, expiry, time_mode)
+        status, info, actual_asset = await self._buy(self.master_client, asset, direction, amount, expiry, time_mode)
         if status:
             order_id = info.get("id", "N/A") if isinstance(info, dict) else "N/A"
             return {"success": True, "order_id": order_id, "actual_asset": actual_asset}
@@ -434,8 +392,7 @@ class QuotexCopyManager:
         def save_notification(msg):
             try:
                 conn = get_db()
-                conn.execute("UPDATE users SET last_notification = ?, balance_version = balance_version + 1 WHERE id = ?",
-                             (msg, user_id))
+                conn.execute("UPDATE users SET last_notification = ?, balance_version = balance_version + 1 WHERE id = ?", (msg, user_id))
                 conn.commit()
                 conn.close()
             except Exception:
@@ -461,7 +418,7 @@ class QuotexCopyManager:
                 follower["start_balance"] = start_balance
             stop, note = self._check_limits(follower, balance)
             if stop:
-                self._stop_copying(user_id, note)
+                self._stop_trading(user_id, note)
                 self.clear_cache(user_id)
                 return {"success": False, "error": "حد الربح/الخسارة"}
             tv = follower.get("trade_value") or 1.0
@@ -469,10 +426,8 @@ class QuotexCopyManager:
                 amount = tv
             else:
                 amount = round(balance * (tv / 100.0), 2)
-            if amount < 1:
-                amount = 1.0
-            if amount > balance:
-                amount = balance
+            if amount < 1: amount = 1.0
+            if amount > balance: amount = balance
             status, info, _ = await self._buy(client, asset, direction, amount, expiry, time_mode)
             if status:
                 order_id = info.get("id", "N/A") if isinstance(info, dict) else "N/A"
@@ -483,11 +438,22 @@ class QuotexCopyManager:
         finally:
             await self._safe_close(client)
 
-    def _active_followers(self):
+    def _active_copy_followers(self):
         conn = get_db()
         rows = conn.execute(
             "SELECT u.* FROM users u JOIN licenses l ON l.key = u.license_key "
             "WHERE u.is_copying = 1 AND u.quotex_ssid IS NOT NULL AND u.quotex_ssid != '' "
+            "AND l.is_active = 1 AND (l.expires_at IS NULL OR l.expires_at > ?)",
+            (now_iso(),),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def _active_auto_traders(self):
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT u.* FROM users u JOIN licenses l ON l.key = u.license_key "
+            "WHERE u.is_auto_trading = 1 AND u.quotex_ssid IS NOT NULL AND u.quotex_ssid != '' "
             "AND l.is_active = 1 AND (l.expires_at IS NULL OR l.expires_at > ?)",
             (now_iso(),),
         ).fetchall()
@@ -512,62 +478,35 @@ class QuotexCopyManager:
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
     async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER"):
+        # نسخ صفقات الأدمن للمستخدمين (is_copying)
         ok, msg = await self.connect_master()
-        if not ok:
-            return {"success": False, "error": msg}
+        if not ok: return {"success": False, "error": msg}
         balance = await self._get_balance(self.master_client)
-        if balance <= 0:
-            return {"success": False, "error": "لا يوجد رصيد"}
+        if balance <= 0: return {"success": False, "error": "لا يوجد رصيد"}
         master_amount = max(1.0, round(balance * (master_pct / 100.0), 2))
         master = await self.open_master_trade(asset, direction, master_amount, expiry, time_mode)
-        if not master["success"]:
-            return master
+        if not master["success"]: return master
         actual_asset = master.get("actual_asset", asset)
-        followers = self._active_followers()
+        followers = self._active_copy_followers()
         copied = await self._copy_all(followers, actual_asset, direction, expiry, time_mode) if followers else 0
         self._log_trade(actual_asset, direction, master_amount, expiry, master["order_id"], copied)
         if followers:
-            self._track(asyncio.create_task(
-                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
+            self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
         return {
             "success": True, "master_order_id": master["order_id"],
             "master_amount": master_amount, "actual_asset": actual_asset,
             "copied_count": copied, "total_followers": len(followers),
         }
 
-    async def _master_signal_trade(self, asset, direction, expiry):
-        try:
-            pct = float(get_setting("master_percentage", "10"))
-        except ValueError:
-            pct = 10.0
-        try:
-            ok, _ = await self.connect_master()
-            if not ok:
-                return
-            balance = await self._get_balance(self.master_client)
-            if balance <= 0:
-                return
-            amount = max(1.0, round(balance * (pct / 100.0), 2))
-            await self.open_master_trade(asset, direction, amount, expiry, "TIMER")
-        except Exception as e:
-            print(f"master signal error: {e}", flush=True)
-
     async def broadcast_signal(self, asset, direction, expiry=60, lead_sec=60):
+        # نسخ إشارات التلجرام للمستخدمين (is_auto_trading)
         await asyncio.sleep(lead_sec)
-        followers = self._active_followers()
-        jobs = []
-        if followers:
-            jobs.append(self._copy_all(followers, asset, direction, expiry, "TIMER"))
-        if get_setting("master_follow_signals", "0") == "1" and get_secret_setting("master_ssid"):
-            jobs.append(self._master_signal_trade(asset, direction, expiry))
-        if not jobs:
-            return
-        results = await asyncio.gather(*jobs, return_exceptions=True)
-        copied = results[0] if followers and isinstance(results[0], int) else 0
+        followers = self._active_auto_traders()
+        if not followers: return
+        copied = await self._copy_all(followers, asset, direction, expiry, "TIMER")
         self._log_trade(asset, direction, 0, expiry, "signal", copied)
         if followers:
-            self._track(asyncio.create_task(
-                self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
+            self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
 
 
 copy_manager = QuotexCopyManager()
