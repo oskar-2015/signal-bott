@@ -19,7 +19,6 @@
             {% endfor %}
         {% endwith %}
 
-        <!-- الإحصائيات -->
         <div class="stats-grid" style="grid-template-columns: 1fr 1fr 1fr;">
             <div class="stat-box">
                 <span class="stat-number">{{ total_users }}</span>
@@ -35,7 +34,6 @@
             </div>
         </div>
 
-        <!-- إنشاء مفتاح -->
         <div class="card highlight">
             <h3>➕ إنشاء مفتاح تفعيل</h3>
             <form action="/admin/create_key" method="POST">
@@ -48,7 +46,6 @@
             </form>
         </div>
 
-        <!-- جدول المفاتيح -->
         <div class="card">
             <h3>📋 المفاتيح</h3>
             {% if licenses %}
@@ -114,19 +111,16 @@
             {% endif %}
         </div>
 
-        <!-- حساب المدير (البريد وكلمة المرور فقط) -->
         <div class="card {% if not master_linked %}highlight{% endif %}">
             <h3>👑 حساب المشرف (الماستر)</h3>
             {% if master_linked %}
                 <p style="color: #81c784; text-align: center;">
                     ✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}
                 </p>
-            {% endif %}
-            {% if master_linked %}
-            <form action="/admin/clear_master" method="POST" style="margin-bottom: 15px;"
-                  onsubmit="return confirm('سيتم فصل حساب المشرف. متأكد؟');">
-                <button type="submit" class="btn-danger">🗑️ فصل حساب المشرف</button>
-            </form>
+                <form action="/admin/clear_master" method="POST" style="margin-bottom: 20px;"
+                      onsubmit="return confirm('سيتم فصل حساب المشرف الحالي. متأكد؟');">
+                    <button type="submit" class="btn-danger">🗑️ فصل حساب المشرف</button>
+                </form>
             {% endif %}
             <details {% if not master_linked %}open{% endif %}>
                 <summary>{% if master_linked %}تحديث الربط{% else %}ربط الحساب{% endif %}</summary>
@@ -149,7 +143,6 @@
             </form>
         </div>
 
-        <!-- صفقة يدوية -->
         <div class="card">
             <h3>🚀 صفقة يدوية (تُنسخ للمفعّلين للنسخ)</h3>
             <form action="/admin/open_trade" method="POST" class="slow">
@@ -174,7 +167,6 @@
             </form>
         </div>
 
-        <!-- المستخدمون -->
         <div class="card">
             <h3>👥 المستخدمون</h3>
             <div class="table-wrap">
