@@ -237,6 +237,30 @@ def api_app_unlink(key):
     if user: clear_user_cache(user["id"])
     return jsonify({"ok": True})
 
+# ==================== API لربط الماستر من تطبيق المدير ====================
+
+@app.route("/api/admin/link_master", methods=["POST"])
+def api_admin_link_master():
+    data = request.get_json(silent=True) or {}
+    ssid = str(data.get("ssid", "")).strip()
+    cookies = str(data.get("cookies", "")).strip()
+    
+    if not ssid and not cookies:
+        return jsonify({"ok": False, "error": "لا توجد جلسة"}), 400
+        
+    try:
+        check = copy_manager.run_async(copy_manager.test_session(ssid or "", cookies or None), timeout=90)
+    except Exception as e:
+        check = {"success": False, "error": str(e)}
+        
+    if not check.get("success"):
+        return jsonify({"ok": False, "error": check.get("error", "الجلسة لا تعمل")}), 400
+        
+    final_ssid = check.get("ssid", "") or ssid
+    set_secret_setting("master_ssid", final_ssid)
+    set_secret_setting("master_cookies", cookies)
+    return jsonify({"ok": True})
+
 # ==================== نقاط النهاية القديمة للويب ====================
 
 @app.route("/auto_login", methods=["POST"])
@@ -395,30 +419,6 @@ def admin_toggle_key():
 def admin_reset_device():
     reset_device(request.form.get("key", ""))
     flash("تم إعادة تعيين الجهاز", "success")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/admin/set_master", methods=["POST"])
-@admin_required
-def admin_set_master():
-    email = request.form.get("master_email", "").strip()
-    password = request.form.get("master_password", "").strip()
-    
-    if not email or not password:
-        flash("أدخل البريد وكلمة المرور", "error")
-        return redirect(url_for("admin_panel"))
-    
-    try: 
-        result = copy_manager.run_async(copy_manager.login_with_credentials(email, password), timeout=90)
-    except Exception as e: 
-        result = {"success": False, "error": str(e)}
-    
-    if result.get("success"):
-        set_setting("master_email", email)
-        set_secret_setting("master_ssid", result["ssid"])
-        set_secret_setting("master_cookies", result.get("cookies", ""))
-        flash("✅ تم ربط حساب المشرف", "success")
-    else:
-        flash(f"❌ فشل: {result.get('error', 'خطأ')}", "error")
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/clear_master", methods=["POST"])
