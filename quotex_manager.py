@@ -189,7 +189,6 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
-                print(f"  [TRY] {host} (ssid={str(ssid)[:15] if ssid else 'none'}...)", flush=True)
                 client = self._make_client(ssid, cookies, host)
                 check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
                 if check:
@@ -209,19 +208,15 @@ class QuotexCopyManager:
                     
                     if user_id is not None:
                         self._fail_count[user_id] = 0
-                    print(f"  ✅ connected via {host}", flush=True)
                     return client, extracted, "OK"
                 last_error = f"{host}: {msg}"
-                print(f"  ❌ {host}: {msg}", flush=True)
                 await self._safe_close(client)
             except asyncio.TimeoutError:
                 last_error = f"{host}: timeout"
-                print(f"  ⏱ {host}: timeout", flush=True)
                 if client:
                     await self._safe_close(client)
             except Exception as e:
                 last_error = f"{host}: {type(e).__name__}: {e}"
-                print(f"  ❌ {host}: {type(e).__name__}: {e}", flush=True)
                 if client:
                     await self._safe_close(client)
 
@@ -268,28 +263,43 @@ class QuotexCopyManager:
                 if not check:
                     await self._safe_close(client)
                     continue
-                ssid, cookies = None, None
-                api = getattr(client, "api", None)
-                for holder in (client, api):
-                    sd = getattr(holder, "session_data", None)
-                    if isinstance(sd, dict):
-                        cookies = cookies or sd.get("cookies")
-                        ssid = ssid or sd.get("token") or sd.get("ssid")
-                if not ssid:
-                    ssid = getattr(api, "ssid", None) or getattr(client, "ssid", None)
                 
-                ssid = _extract_ssid_string(ssid)
+                await asyncio.sleep(2)
+                
+                ssid = None
+                cookies = None
+                
+                api = getattr(client, 'api', None)
+                for holder in (client, api):
+                    if holder is None: continue
+                    sd = getattr(holder, 'session_data', None)
+                    if isinstance(sd, dict):
+                        cookies = cookies or sd.get('cookies')
+                        ssid = ssid or sd.get('token') or sd.get('ssid')
+                
+                if not ssid and api:
+                    ssid = _extract_ssid_string(getattr(api, 'ssid', None))
+                if not ssid:
+                    ssid = _extract_ssid_string(getattr(client, 'ssid', None))
+                
+                if not ssid:
+                    fc, fs = _read_session_file(email)
+                    ssid = ssid or fs
+                    cookies = cookies or fc
                 
                 await self._safe_close(client)
-                if ssid:
+                
+                if ssid and len(ssid) > 20 and not ssid.startswith('<'):
                     return {"success": True, "ssid": ssid, "cookies": cookies or ""}
-                return {"success": False, "error": "تم الدخول لكن لم نستطع قراءة SSID"}
+                
+                return {"success": False, "error": "لم نستطع استخراج جلسة صالحة من الحساب. تأكد من البريد وكلمة المرور."}
+                
             except asyncio.TimeoutError:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
                 print(f"login error: {e}", flush=True)
-        return {"success": False, "error": "فشل تسجيل الدخول، تأكد من البيانات أو استخدم شبكة أخرى"}
+        return {"success": False, "error": "فشل تسجيل الدخول - تحقق من البيانات"}
 
     async def test_session(self, ssid, cookies=None):
         client, extracted_ssid, msg = await self._connect_any_host(ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20])
@@ -306,7 +316,6 @@ class QuotexCopyManager:
         cookies = get_secret_setting("master_cookies")
         
         if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
-            print(f"[MASTER] ⚠️ Detected corrupt SSID, ignoring: {ssid[:40]}", flush=True)
             ssid = None
         
         if not ssid and not cookies:
@@ -316,7 +325,6 @@ class QuotexCopyManager:
             await self._safe_close(self.master_client)
             self.master_client = None
         
-        print(f"Master connecting: ssid={'yes' if ssid else 'no'}, cookies={'yes' if cookies else 'no'}", flush=True)
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id="master")
         if client is None:
             return False, msg
@@ -374,9 +382,9 @@ class QuotexCopyManager:
             profit_txt = f"+{pct:.2f}% (${diff:.2f})"
         tail = f"\nرصيد البداية: ${start:.2f} ← الحالي: ${balance:.2f}"
         if loss_hit:
-            return True, f"⚠️ حد الخسارة.\n{loss_txt}{tail}"
+            return True, f"⚠️ تم الوصول لحد الخسارة وإيقاف النسخ تلقائياً.\nخسارة الجلسة: {loss_txt}{tail}"
         if profit_hit:
-            return True, f"🎉 هدف الربح.\n{profit_txt}{tail}"
+            return True, f"🎉 تهانينا! تم الوصول لهدف الربح وإيقاف النسخ تلقائياً.\nربح الجلسة: {profit_txt}{tail}"
         return False, ""
 
     def _stop_trading(self, user_id, notification):
@@ -466,6 +474,7 @@ class QuotexCopyManager:
             return {"success": False, "error": "لا توجد جلسة"}
         user_id = follower["id"]
         account_type = follower.get("account_type", "demo")
+        acct_label = "تجريبي" if account_type == "demo" else "حقيقي"
 
         def save_notification(msg):
             try:
@@ -479,13 +488,12 @@ class QuotexCopyManager:
         client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user_id)
         if client is None:
             return {"success": False, "error": f"فشل الاتصال: {msg}"}
+            
         try:
             await self._switch_account(client, account_type)
             balance = await self._get_balance(client)
-            if balance <= 0:
-                err = "❌ لا يوجد رصيد كافٍ"
-                save_notification(err)
-                return {"success": False, "error": err}
+            
+            # احتساب قيمة الصفقة المطلوبة
             start_balance = follower.get("start_balance")
             if not start_balance or start_balance <= 0:
                 start_balance = balance
@@ -494,23 +502,38 @@ class QuotexCopyManager:
                 conn.commit()
                 conn.close()
                 follower["start_balance"] = start_balance
+
+            # فحص حدود الربح والخسارة قبل أي صفقة جديدة
             stop, note = self._check_limits(follower, balance)
             if stop:
                 self._stop_trading(user_id, note)
                 self.clear_cache(user_id)
-                return {"success": False, "error": "حد الربح/الخسارة"}
+                return {"success": False, "error": "تم الوصول لحد الربح أو الخسارة"}
+
             tv = follower.get("trade_value") or 1.0
             if (follower.get("trade_mode") or "percent") == "fixed":
                 amount = tv
             else:
                 amount = round(balance * (tv / 100.0), 2)
-            if amount < 1: amount = 1.0
-            if amount > balance: amount = balance
+            
+            if amount < 1:
+                amount = 1.0
+
+            # فحص كفاية الرصيد
+            if amount > balance:
+                err_msg = f"⚠️ رصيد غير كافٍ في الحساب ({acct_label}).\nالمطلوب للصفقة: ${amount:.2f}\nالرصيد الحالي: ${balance:.2f}"
+                save_notification(err_msg)
+                return {"success": False, "error": "insufficient_balance"}
+
             status, info, _ = await self._buy(client, asset, direction, amount, expiry, time_mode)
             if status:
                 order_id = info.get("id", "N/A") if isinstance(info, dict) else "N/A"
                 return {"success": True, "order_id": order_id, "amount": amount}
-            return {"success": False, "error": str(info)}
+            else:
+                err_msg = f"⚠️ فشل تنفيذ الصفقة على الحساب ({acct_label}).\nالسبب: {info}"
+                save_notification(err_msg)
+                return {"success": False, "error": str(info)}
+                
         except Exception as e:
             return {"success": False, "error": str(e)}
         finally:
@@ -556,10 +579,6 @@ class QuotexCopyManager:
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
     async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER", skip_master=False):
-        """
-        نسخ صفقة إلى المتابعين.
-        إذا skip_master=True، لا تفتح صفقة على حساب الماستر (لأنها فُتحت بالفعل).
-        """
         if not skip_master:
             ok, msg = await self.connect_master()
             if not ok: return {"success": False, "error": msg}
