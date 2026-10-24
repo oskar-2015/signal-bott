@@ -16,6 +16,9 @@ _fernet = Fernet(_enc_key.encode())
 def encrypt(text):
     if not text:
         return None
+    # حماية إضافية: تحويل أي كائن إلى نص قبل التشفير
+    if not isinstance(text, str):
+        text = str(text)
     return _fernet.encrypt(text.encode()).decode()
 
 
@@ -81,7 +84,6 @@ def init_db():
         )
     """)
     
-    # ترقية قاعدة البيانات القديمة (إضافة العمود إذا لم يكن موجوداً)
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_auto_trading INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
