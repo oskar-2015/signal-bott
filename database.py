@@ -65,6 +65,7 @@ def init_db():
             quotex_email TEXT,
             quotex_cookies TEXT,
             is_copying INTEGER DEFAULT 0,
+            is_auto_trading INTEGER DEFAULT 0,
             trade_mode TEXT DEFAULT 'percent',
             trade_value REAL DEFAULT 1.0,
             max_loss_value REAL DEFAULT 0,
@@ -79,6 +80,12 @@ def init_db():
             FOREIGN KEY (license_key) REFERENCES licenses(key)
         )
     """)
+    
+    # ترقية قاعدة البيانات القديمة (إضافة العمود إذا لم يكن موجوداً)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_auto_trading INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS trade_logs (
@@ -143,7 +150,7 @@ def clear_user_session(license_key):
     conn = get_db()
     conn.execute(
         "UPDATE users SET quotex_ssid = NULL, quotex_email = NULL, quotex_cookies = NULL, "
-        "is_copying = 0, start_balance = NULL, last_notification = NULL, "
+        "is_copying = 0, is_auto_trading = 0, start_balance = NULL, last_notification = NULL, "
         "settings_locked = 0, balance_version = balance_version + 1 WHERE license_key = ?",
         (license_key,),
     )
