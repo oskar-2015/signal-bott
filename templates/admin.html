@@ -35,6 +35,7 @@
             </div>
         </div>
 
+        <!-- إنشاء مفتاح -->
         <div class="card highlight">
             <h3>➕ إنشاء مفتاح تفعيل</h3>
             <form action="/admin/create_key" method="POST">
@@ -47,21 +48,89 @@
             </form>
         </div>
 
+        <!-- جدول المفاتيح -->
         <div class="card">
-            <h3>👑 حساب المشرف</h3>
+            <h3>📋 المفاتيح</h3>
+            {% if licenses %}
+            <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>المفتاح</th>
+                        <th>ينتهي</th>
+                        <th>الحالة</th>
+                        <th>الجهاز</th>
+                        <th>إجراءات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for lic in licenses %}
+                    <tr>
+                        <td>
+                            <code class="key-cell" id="key-{{ loop.index }}">{{ lic.key }}</code>
+                            <button type="button" class="btn-small btn-copy" onclick="copyKey('key-{{ loop.index }}', event)" title="نسخ">📋</button>
+                        </td>
+                        <td style="font-size: 12px;">{{ lic.expires_at[:16].replace('T', ' ') ~ ' UTC' if lic.expires_at else 'للأبد' }}</td>
+                        <td>
+                            {% if lic.is_active %}
+                                <span class="badge active">فعّال</span>
+                            {% else %}
+                                <span class="badge inactive">موقوف</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 12px;">
+                            {% if lic.device_ip %}
+                                🔒 مربوط
+                                <form action="/admin/reset_device" method="POST" style="display:inline;">
+                                    <input type="hidden" name="key" value="{{ lic.key }}">
+                                    <button type="submit" class="btn-small btn-secondary">إعادة تعيين</button>
+                                </form>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            <form action="/admin/toggle_key" method="POST" style="display:inline;">
+                                <input type="hidden" name="key" value="{{ lic.key }}">
+                                {% if lic.is_active %}
+                                    <input type="hidden" name="action" value="deactivate">
+                                    <button type="submit" class="btn-small btn-warning">إيقاف مؤقت</button>
+                                {% else %}
+                                    <input type="hidden" name="action" value="activate">
+                                    <button type="submit" class="btn-small btn-success">تفعيل</button>
+                                {% endif %}
+                            </form>
+                            <form action="/admin/delete_key" method="POST" style="display:inline;"
+                                  onsubmit="return confirm('حذف نهائي للمفتاح وكل بيانات المستخدم؟');">
+                                <input type="hidden" name="key" value="{{ lic.key }}">
+                                <button type="submit" class="btn-small btn-danger">حذف نهائي</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+                <p style="text-align: center; color: #666;">لا توجد مفاتيح بعد</p>
+            {% endif %}
+        </div>
+
+        <!-- حساب المدير (البريد وكلمة المرور فقط) -->
+        <div class="card {% if not master_linked %}highlight{% endif %}">
+            <h3>👑 حساب المشرف (الماستر)</h3>
             {% if master_linked %}
-                <p style="color: #81c784; text-align: center;">✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}</p>
+                <p style="color: #81c784; text-align: center;">
+                    ✅ الحساب مرتبط{% if master_email %}: <code>{{ master_email }}</code>{% endif %}
+                </p>
             {% endif %}
             <details {% if not master_linked %}open{% endif %}>
-                <summary>ربط أو تحديث الحساب</summary>
+                <summary>{% if master_linked %}تحديث الربط{% else %}ربط الحساب{% endif %}</summary>
                 <form action="/admin/set_master" method="POST" class="slow">
-                    <input type="email" name="master_email" placeholder="البريد الإلكتروني">
-                    <input type="password" name="master_password" placeholder="كلمة المرور">
-                    <input type="text" name="master_ssid" placeholder="SSID" style="direction:ltr;">
-                    <textarea name="master_cookies" placeholder="Cookies"></textarea>
+                    <input type="email" name="master_email" placeholder="البريد الإلكتروني" required>
+                    <input type="password" name="master_password" placeholder="كلمة المرور" required>
                     <button type="submit" class="btn-primary">🔗 ربط</button>
                 </form>
             </details>
+
             <form action="/admin/save_master_settings" method="POST">
                 <label class="field-label">النسبة من رصيد المشرف (%)</label>
                 <input type="number" name="master_pct" step="0.1" min="0.1" max="100" value="{{ master_pct }}" required>
@@ -74,6 +143,7 @@
             </form>
         </div>
 
+        <!-- صفقة يدوية -->
         <div class="card">
             <h3>🚀 صفقة يدوية (تُنسخ للمفعّلين للنسخ)</h3>
             <form action="/admin/open_trade" method="POST" class="slow">
@@ -91,13 +161,14 @@
                 </select>
                 <select name="expiry">
                     {% for seconds, label in expiry_options %}
-                        <option value="{{ seconds }}" {% if seconds == 60 %}selected{% endif %}>{{ label }}</option>
+                        <option value="{{ seconds }}" {% if seconds == 60 %}selected{% endif %}>{{ seconds }} ثانية</option>
                     {% endfor %}
                 </select>
                 <button type="submit" class="btn-primary">📈 فتح ونسخ الصفقة</button>
             </form>
         </div>
 
+        <!-- المستخدمون -->
         <div class="card">
             <h3>👥 المستخدمون</h3>
             <div class="table-wrap">
@@ -129,6 +200,20 @@
         <a href="/admin/logout" class="logout">تسجيل خروج</a>
     </div>
     <script>
+        function copyKey(id, event) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const text = el.textContent.trim();
+            navigator.clipboard.writeText(text).then(function () {
+                const btn = event.target;
+                const old = btn.textContent;
+                btn.textContent = '✓';
+                setTimeout(function () { btn.textContent = old; }, 1000);
+            }).catch(function () {
+                alert('انسخ المفتاح يدوياً: ' + text);
+            });
+        }
+
         document.querySelectorAll('form.slow').forEach(function (f) {
             f.addEventListener('submit', function () {
                 const b = f.querySelector('button[type=submit]');
