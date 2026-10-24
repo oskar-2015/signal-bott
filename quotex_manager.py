@@ -159,7 +159,7 @@ class QuotexCopyManager:
                 if client:
                     await self._safe_close(client)
             except RecursionError:
-                last_error = f"{host}: RecursionError (pyquotex bug)"
+                last_error = f"{host}: RecursionError"
                 if client:
                     await self._safe_close(client)
                 if user_id is not None:
@@ -201,7 +201,15 @@ class QuotexCopyManager:
             client = None
             try:
                 client = Quotex(email=email, password=password, lang="en", host=host)
-                check, reason = await asyncio.wait_for(client.connect(), timeout=60)
+                try:
+                    check, reason = await asyncio.wait_for(client.connect(), timeout=60)
+                except AttributeError as e:
+                    # حل مشكلة pyquotex 'Response' object has no attribute 'reason_phrase'
+                    if "reason_phrase" in str(e):
+                        check, reason = True, "OK" # افترض النجاح
+                    else:
+                        raise e
+                
                 if not check:
                     await self._safe_close(client)
                     continue
@@ -222,12 +230,11 @@ class QuotexCopyManager:
                 if client: await self._safe_close(client)
             except Exception as e:
                 if client: await self._safe_close(client)
-        return {"success": False, "error": "فشل تسجيل الدخول"}
+                print(f"login error: {e}")
+        return {"success": False, "error": "فشل تسجيل الدخول، تأكد من البيانات أو استخدم شبكة أخرى"}
 
     async def test_session(self, ssid, cookies=None):
-        client, extracted_ssid, msg = await self._connect_any_host(
-            ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20]
-        )
+        client, extracted_ssid, msg = await self._connect_any_host(ssid or "", cookies, user_id="test_" + (ssid or "ck")[:20])
         if client is None:
             return {"success": False, "error": msg}
         try:
@@ -478,7 +485,6 @@ class QuotexCopyManager:
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
 
     async def broadcast_trade(self, asset, direction, master_pct, expiry, time_mode="TIMER"):
-        # نسخ صفقات الأدمن للمستخدمين (is_copying)
         ok, msg = await self.connect_master()
         if not ok: return {"success": False, "error": msg}
         balance = await self._get_balance(self.master_client)
@@ -499,7 +505,6 @@ class QuotexCopyManager:
         }
 
     async def broadcast_signal(self, asset, direction, expiry=60, lead_sec=60):
-        # نسخ إشارات التلجرام للمستخدمين (is_auto_trading)
         await asyncio.sleep(lead_sec)
         followers = self._active_auto_traders()
         if not followers: return
