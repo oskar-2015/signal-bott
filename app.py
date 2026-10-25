@@ -33,6 +33,7 @@ APK_DOWNLOAD_URL = os.environ.get("APK_DOWNLOAD_URL", "#")
 
 init_db()
 
+
 @app.after_request
 def add_no_cache(response):
     if request.path.startswith("/admin") or request.path.startswith("/api/admin"):
@@ -198,7 +199,6 @@ def api_app_save_and_enable(key):
     elif trade_value < 1: return jsonify({"ok": False, "error": "المبلغ الثابت 1$ على الأقل"}), 400
     if max_loss_value < 0 or max_profit_value < 0: return jsonify({"ok": False, "error": "القيم يجب أن تكون موجبة"}), 400
 
-    # التحقق من حالة تعطيل التداول الآلي من المدير
     if enable_type == "auto" and get_setting("admin_auto_enabled", "1") != "1":
         return jsonify({"ok": False, "error": "التداول الآلي معطّل من قبل المدير"}), 400
 
@@ -208,21 +208,23 @@ def api_app_save_and_enable(key):
     is_copying = 1 if enable_type == "copy" else 0
     is_auto_trading = 1 if enable_type == "auto" else 0
 
-    # تحديث نوع الحساب أولاً في DB قبل جلب الرصيد
     conn = get_db()
     conn.execute("UPDATE users SET account_type = ? WHERE license_key = ?", (account_type, key))
     conn.commit()
     conn.close()
 
-    # جلب الرصيد بالحساب الصحيح
     fresh_user = get_user(key)
     try:
-        stats = copy_manager.run_async(copy_manager.get_user_stats(fresh_user), timeout=70)
+        stats = copy_manager.run_async(copy_manager.get_user_stats(fresh_user), timeout=90)
     except Exception as e:
-        return jsonify({"ok": False, "error": f"تعذر جلب الرصيد: {e}"}), 400
+        return jsonify({"ok": False, "error": f"تعذر الاتصال بالحساب: {e}"}), 400
 
-    if not (stats.get("ok") and stats["balance"] > 0):
-        return jsonify({"ok": False, "error": f"الرصيد صفر أو تعذر جلبه (الحساب: {account_type})"}), 400
+    if not stats.get("ok"):
+        err = stats.get("error", "تعذر الاتصال")
+        return jsonify({"ok": False, "error": f"تعذر الاتصال بالحساب: {err}"}), 400
+    if stats["balance"] <= 0:
+        label = "الحقيقي" if account_type == "live" else "التجريبي"
+        return jsonify({"ok": False, "error": f"رصيد حسابك {label} صفر. أضف أموالاً أو غيّر نوع الحساب"}), 400
 
     new_start = stats["balance"]
 
@@ -285,10 +287,6 @@ def api_app_clear_notification(key):
 
 @app.route("/api/app/session_stats/<key>")
 def api_app_session_stats(key):
-    """
-    يعرض الرصيد. يدعم معامل ?account=demo|live لعرض رصيد الحساب المحدد
-    قبل التفعيل (عند تغيير المستخدم لنوع الحساب).
-    """
     key = key.strip().upper()
     ok, msg = is_key_valid(key)
     if not ok: return jsonify({"ok": False, "error": msg}), 403
@@ -296,7 +294,6 @@ def api_app_session_stats(key):
     if not user or (not user["quotex_ssid"] and not user["quotex_cookies"]):
         return jsonify({"ok": False, "error": "غير مرتبط"}), 400
 
-    # دعم قراءة رصيد حساب معين (قبل التفعيل) - لا يغير المحفوظ في DB
     requested_account = request.args.get("account", "").strip().lower()
     if requested_account in ("demo", "live"):
         user = dict(user)
@@ -368,12 +365,11 @@ def api_admin_realtime_trade():
     if raw:
         m = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw)
         if not m:
-            print(f"[REALTIME] No JSON in raw: {raw[:100]}", flush=True)
             return jsonify({"ok": False, "error": "no json"}), 400
         try:
             p = json_lib.loads(m.group(0))
         except Exception as e:
-            print(f"[REALTIME] JSON parse error: {e} | raw={raw[:200]}", flush=True)
+            print(f"[REALTIME] JSON parse error: {e}", flush=True)
             return jsonify({"ok": False, "error": "parse fail"}), 400
     else:
         p = data
@@ -393,7 +389,6 @@ def api_admin_realtime_trade():
     elif action in (-1, "put", "down", False): dir_str = "put"
 
     if not dir_str:
-        print(f"[REALTIME] Bad direction: {action}", flush=True)
         return jsonify({"ok": False, "error": "bad direction"}), 400
 
     try:
