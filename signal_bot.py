@@ -24,7 +24,6 @@ except ImportError:
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or TELEGRAM_CHAT_ID
 
-SESSION_FILE = "qx_session.json"
 NUM_PAIRS = 15
 TRADE_DURATION_MIN = 1
 LEAD_TIME_SEC = 60
@@ -64,39 +63,21 @@ def is_crypto(asset_name):
     return False
 
 
-def load_session():
+def load_master_session():
     """
-    الأولوية 1: جلسة الماستر من قاعدة البيانات (التي ربطها المدير من التطبيق).
-    الأولوية 2: متغيرات البيئة (قديمة - احتياطي فقط).
-    الأولوية 3: ملف qx_session.json (قديم - احتياطي).
+    يُحمّل جلسة الماستر فقط من قاعدة البيانات.
+    لا يستخدم qx_session.json ولا متغيرات البيئة القديمة.
     """
-    # 1. جلسة الماستر من DB
     try:
         master_ssid = get_secret_setting("master_ssid")
         master_cookies = get_secret_setting("master_cookies")
-        if master_ssid and master_cookies:
-            if not (master_ssid.startswith('<') or 'object at 0x' in master_ssid):
-                print("✅ session loaded from MASTER (admin account)", flush=True)
-                return master_cookies, master_ssid
+        if not master_ssid:
+            return None, None
+        if master_ssid.startswith('<') or 'object at 0x' in master_ssid:
+            return None, None
+        return master_cookies, master_ssid
     except Exception as e:
-        print(f"master session error: {e}", flush=True)
-
-    # 2. متغيرات البيئة (احتياطي - قديم)
-    env_cookies = os.environ.get("QX_COOKIES")
-    env_ssid = os.environ.get("QX_SSID")
-    if env_cookies and env_ssid:
-        print("⚠️ session loaded from env vars (legacy)", flush=True)
-        return env_cookies, env_ssid
-
-    # 3. ملف (احتياطي - قديم)
-    if not os.path.exists(SESSION_FILE):
-        return None, None
-    try:
-        with open(SESSION_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        print("⚠️ session loaded from qx_session.json (legacy)", flush=True)
-        return data.get("cookies_str"), data.get("ssid")
-    except Exception:
+        print(f"load_master_session error: {e}", flush=True)
         return None, None
 
 
@@ -151,7 +132,7 @@ def analyze_strength(closes):
 
 def send_telegram(asset, direction, entry_time, duration_min):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("telegram skipped: missing token/chat")
+        print("telegram skipped: missing credentials", flush=True)
         return
     arrow = "صعود Call \U0001F7E2" if direction == "up" else "هبوط Put \U0001F534"
     text = (
@@ -166,48 +147,47 @@ def send_telegram(asset, direction, entry_time, duration_min):
     )
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={
+        r = requests.post(url, json={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": text,
             "parse_mode": "HTML"
         }, timeout=15)
-        print(f"sent to telegram: {asset} {direction}")
+        print(f"telegram sent: {asset} {direction} (status: {r.status_code})", flush=True)
     except Exception as e:
-        print(f"telegram error: {e}")
+        print(f"telegram error: {e}", flush=True)
 
 
 async def connect_client():
-    cookies_str, ssid = load_session()
-    if not cookies_str or not ssid:
-        print("no session data available", flush=True)
-        return None
+    cookies_str, ssid = load_master_session()
+    if not ssid:
+        return None, "master_not_linked"
+    
     client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.com")
     client.set_session(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        cookies=cookies_str,
+        cookies=cookies_str or "",
         ssid=ssid
     )
     try:
-        check, reason = await asyncio.wait_for(client.connect(), timeout=60)
+        check, reason = await asyncio.wait_for(client.connect(), timeout=90)
     except asyncio.TimeoutError:
-        print("connect timeout", flush=True)
-        return None
+        return None, "timeout"
     except Exception as e:
-        print(f"connect exception: {e}", flush=True)
-        return None
+        return None, f"{type(e).__name__}: {e}"
+    
     if not check:
-        print(f"connect failed: {reason}", flush=True)
-        return None
-    print("✅ connected successfully", flush=True)
-    return client
+        return None, f"rejected: {reason}"
+    
+    print("✅ signal bot connected successfully", flush=True)
+    return client, "OK"
 
 
 async def get_top_open_assets(client, n=NUM_PAIRS, min_payout=MIN_PAYOUT):
     try:
         all_assets = client.get_all_asset_name()
     except Exception as e:
-        print(f"asset list error: {e}")
+        print(f"asset list error: {e}", flush=True)
         return []
     candidates = []
     for item in all_assets:
@@ -243,7 +223,7 @@ async def pick_best_signal(client, assets):
             closes = await get_closes(client, name)
             direction, strength = analyze_strength(closes)
         except Exception as e:
-            print(f"candles error {name}: {e}")
+            print(f"candles error {name}: {e}", flush=True)
             continue
         if strength < MIN_STRENGTH:
             continue
@@ -253,84 +233,85 @@ async def pick_best_signal(client, assets):
 
 
 async def main_loop():
+    """
+    حلقة التداول. تستيقظ تلقائياً عند ربط الماستر.
+    عند الفشل، تنتظر أوقات طويلة (5-60 دقيقة) لحماية IP من الحظر.
+    """
     client = None
     cycle = 0
-    consecutive_failures = 0
+    fail_streak = 0
 
     while True:
         try:
             if client is None:
-                client = await connect_client()
+                # تحقق من وجود جلسة ماستر
+                _ck, _ss = load_master_session()
+                if not _ss:
+                    print("[BOT] master not linked yet, waiting 2 minutes...", flush=True)
+                    fail_streak = 0
+                    await asyncio.sleep(120)
+                    continue
+                
+                client, err = await connect_client()
                 if client is None:
-                    consecutive_failures += 1
-                    
-                    if consecutive_failures >= 5:
-                        print("=" * 70, flush=True)
-                        print("⚠️  5 consecutive failures - bot stopping to protect IP", flush=True)
-                        print("⚠️  Ensure master account is linked, then redeploy", flush=True)
-                        print("=" * 70, flush=True)
-                        try:
-                            while True:
-                                time.sleep(3600)
-                        except KeyboardInterrupt:
-                            return
-                    
-                    # انتظار أطول كل مرة للحماية من الحظر
-                    if consecutive_failures >= 3:
-                        wait_s = 15 * 60  # 15 دقيقة
-                    elif consecutive_failures >= 2:
-                        wait_s = 10 * 60  # 10 دقائق
+                    fail_streak += 1
+                    if fail_streak >= 5:
+                        wait_s = 3600   # 60 دقيقة
+                    elif fail_streak >= 3:
+                        wait_s = 1800   # 30 دقيقة
+                    elif fail_streak >= 2:
+                        wait_s = 900    # 15 دقيقة
                     else:
-                        wait_s = 5 * 60   # 5 دقائق
+                        wait_s = 300    # 5 دقائق
                     
-                    print(f"connect failed (attempt {consecutive_failures}/5), retrying in {wait_s}s", flush=True)
+                    print(f"[BOT] connect failed ({err}) - attempt {fail_streak} - waiting {wait_s}s to protect IP", flush=True)
                     await asyncio.sleep(wait_s)
                     continue
-
-            consecutive_failures = 0
+                
+                fail_streak = 0
+            
             cycle += 1
-            print(f"cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}", flush=True)
+            print(f"[BOT] cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}", flush=True)
             
             top_assets = await get_top_open_assets(client)
             if not top_assets:
-                print("no open assets this cycle")
+                print("[BOT] no open assets this cycle", flush=True)
                 await asyncio.sleep(LEAD_TIME_SEC)
                 continue
 
             best = await pick_best_signal(client, top_assets)
             if best is None:
-                print("no strong confirmed signal this cycle, skipping")
+                print("[BOT] no strong signal this cycle", flush=True)
                 await asyncio.sleep(LEAD_TIME_SEC)
                 continue
 
             asset, payout, strength, direction = best
-            print(f"best: {asset} payout={payout} strength={strength:.2f} dir={direction}", flush=True)
+            print(f"[BOT] signal: {asset} {direction} (strength {strength:.2f})", flush=True)
 
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
             
-            # 1. تلجرام (إذا مفعل)
             if get_setting("admin_bot_enabled", "1") == "1":
                 send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
             else:
-                print("telegram bot disabled by admin, skipping send", flush=True)
+                print("[BOT] telegram disabled by admin - not sending", flush=True)
 
-            # 2. نسخ للمستخدمين (إذا مفعل)
             if get_setting("admin_auto_enabled", "1") == "1":
                 trade_dir = "call" if direction == "up" else "put"
                 copy_manager.submit(copy_manager.broadcast_signal(
                     asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
                 ))
             else:
-                print("auto trading disabled by admin, skipping copy", flush=True)
+                print("[BOT] auto trading disabled by admin - not copying", flush=True)
 
             wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
-            print(f"waiting {wait_seconds}s")
+            print(f"[BOT] waiting {wait_seconds}s", flush=True)
             await asyncio.sleep(wait_seconds)
 
         except Exception as e:
-            print(f"main loop error: {e}, reconnecting in 5 minutes", flush=True)
+            print(f"[BOT] loop error: {e}, reconnecting in 15 minutes", flush=True)
             client = None
-            await asyncio.sleep(300)
+            fail_streak += 1
+            await asyncio.sleep(900)
 
 
 if __name__ == "__main__":
@@ -348,24 +329,13 @@ if __name__ == "__main__":
             while True:
                 time.sleep(3600)
         except KeyboardInterrupt:
-            print("stopped")
+            pass
     else:
-        _cookies, _ssid = load_session()
-        if not _cookies or not _ssid:
-            print("=" * 70, flush=True)
-            print("⚠️  Signal bot enabled but NO valid session found!", flush=True)
-            print("⚠️  Link master account from admin app first, then redeploy", flush=True)
-            print("=" * 70, flush=True)
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                print("stopped")
-        else:
-            print("=" * 70, flush=True)
-            print("✅ Signal bot ENABLED - starting", flush=True)
-            print("=" * 70, flush=True)
-            try:
-                asyncio.run(main_loop())
-            except KeyboardInterrupt:
-                print("stopped")
+        print("=" * 70, flush=True)
+        print("✅ Signal bot ENABLED", flush=True)
+        print("ℹ️  Will wait until master account is linked", flush=True)
+        print("=" * 70, flush=True)
+        try:
+            asyncio.run(main_loop())
+        except KeyboardInterrupt:
+            print("stopped")
