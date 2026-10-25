@@ -160,9 +160,8 @@ class QuotexCopyManager:
         client.set_session(**args)
         return client
 
-    async def _connect_any_host(self, ssid, cookies, user_id=None):
-        # تبريد قوي جداً لحماية IP من 429
-        if user_id is not None:
+    async def _connect_any_host(self, ssid, cookies, user_id=None, bypass_cooldown=False):
+        if user_id is not None and not bypass_cooldown:
             now = time.time()
             last = self._last_attempt.get(user_id, 0)
             fails = self._fail_count.get(user_id, 0)
@@ -178,7 +177,7 @@ class QuotexCopyManager:
                 cooldown = 0
             if now - last < cooldown:
                 wait = int(cooldown - (now - last))
-                return None, None, f"cooldown ({wait}s, {fails} previous failures)"
+                return None, None, f"cooldown ({wait}s, {fails} prev fails)"
             self._last_attempt[user_id] = now
 
         last_error = "unknown"
@@ -196,7 +195,7 @@ class QuotexCopyManager:
                                 extracted = _extract_ssid_string(api.ssid)
                         except:
                             pass
-                    if user_id is not None:
+                    if user_id is not None and not bypass_cooldown:
                         self._fail_count[user_id] = 0
                     return client, extracted, "OK"
                 last_error = str(msg)
@@ -208,7 +207,7 @@ class QuotexCopyManager:
                 last_error = f"{type(e).__name__}: {e}"
                 if client: await self._safe_close(client)
 
-        if user_id is not None:
+        if user_id is not None and not bypass_cooldown:
             self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
         return None, None, last_error
 
@@ -356,7 +355,6 @@ class QuotexCopyManager:
                     if not row or not row["quotex_ssid"]:
                         continue
                     user_dict = dict(row)
-                    # لا نعيد المحاولة إذا كان هناك cooldown
                     await self.refresh_and_notify(user_dict)
                 except Exception as e:
                     print(f"[REFRESH] {key} failed: {e}", flush=True)
@@ -384,7 +382,7 @@ class QuotexCopyManager:
                 pass
         return (False, "فشلت", asset)
 
-    async def copy_to_follower(self, follower, asset, direction, expiry, time_mode):
+    async def copy_to_follower(self, follower, asset, direction, expiry, time_mode, bypass_cooldown=False):
         ssid, cookies = get_session_plain(follower)
         if ssid and (ssid.startswith('<') or 'object at 0x' in ssid):
             ssid = None
@@ -403,8 +401,9 @@ class QuotexCopyManager:
             except:
                 pass
 
-        client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user_id)
+        client, _, msg = await self._connect_any_host(ssid or "", cookies, user_id=user_id, bypass_cooldown=bypass_cooldown)
         if client is None:
+            print(f"[COPY] user {user_id}: connect failed ({msg})", flush=True)
             return {"success": False, "error": msg}
 
         try:
@@ -435,14 +434,19 @@ class QuotexCopyManager:
 
             if amount > balance:
                 save_notification(f"⚠️ رصيد غير كافٍ في الحساب ({acct_label}).\nالمطلوب: ${amount:.2f}\nالرصيد: ${balance:.2f}")
+                print(f"[COPY] user {user_id}: insufficient balance ({balance:.2f} < {amount:.2f})", flush=True)
                 return {"success": False, "error": "insufficient_balance"}
 
             status, info, _ = await self._buy(client, asset, direction, amount, expiry, time_mode)
             if status:
+                print(f"[COPY] ✅ user {user_id} ({acct_label}): ${amount:.2f} opened", flush=True)
                 return {"success": True, "order_id": info.get("id", "N/A") if isinstance(info, dict) else "N/A", "amount": amount}
-            save_notification(f"⚠️ فشل تنفيذ الصفقة على الحساب ({acct_label}).\nالسبب: {info}")
-            return {"success": False, "error": str(info)}
+            else:
+                save_notification(f"⚠️ فشل تنفيذ الصفقة على الحساب ({acct_label}).\nالسبب: {info}")
+                print(f"[COPY] ❌ user {user_id} ({acct_label}): buy failed ({info})", flush=True)
+                return {"success": False, "error": str(info)}
         except Exception as e:
+            print(f"[COPY] user {user_id} exception: {e}", flush=True)
             return {"success": False, "error": str(e)}
         finally:
             await self._safe_close(client)
@@ -478,9 +482,9 @@ class QuotexCopyManager:
         conn.commit()
         conn.close()
 
-    async def _copy_all(self, followers, asset, direction, expiry, time_mode):
+    async def _copy_all(self, followers, asset, direction, expiry, time_mode, bypass_cooldown=False):
         results = await asyncio.gather(
-            *[self.copy_to_follower(f, asset, direction, expiry, time_mode) for f in followers],
+            *[self.copy_to_follower(f, asset, direction, expiry, time_mode, bypass_cooldown) for f in followers],
             return_exceptions=True,
         )
         return sum(1 for r in results if isinstance(r, dict) and r.get("success"))
@@ -503,7 +507,7 @@ class QuotexCopyManager:
             amount_used = master_pct
 
         followers = self._active_copy_followers()
-        copied = await self._copy_all(followers, actual_asset, direction, expiry, time_mode) if followers else 0
+        copied = await self._copy_all(followers, actual_asset, direction, expiry, time_mode, bypass_cooldown=True) if followers else 0
         self._log_trade(actual_asset, direction, amount_used, expiry, order_id, copied)
         if followers:
             self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
@@ -526,13 +530,20 @@ class QuotexCopyManager:
         return {"success": False, "error": str(info), "actual_asset": asset}
 
     async def broadcast_signal(self, asset, direction, expiry=60, lead_sec=60):
-        await asyncio.sleep(lead_sec)
-        followers = self._active_auto_traders()
-        if not followers: return
-        copied = await self._copy_all(followers, asset, direction, expiry, "TIMER")
-        self._log_trade(asset, direction, 0, expiry, "signal", copied)
-        if followers:
-            self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
+        try:
+            await asyncio.sleep(lead_sec)
+            followers = self._active_auto_traders()
+            print(f"[SIGNAL] {asset} {direction} -> {len(followers)} auto-traders", flush=True)
+            if not followers:
+                print(f"[SIGNAL] No auto-traders enabled, skipping", flush=True)
+                return
+            copied = await self._copy_all(followers, asset, direction, expiry, "TIMER", bypass_cooldown=True)
+            print(f"[SIGNAL] Copied {copied}/{len(followers)}", flush=True)
+            self._log_trade(asset, direction, 0, expiry, "signal", copied)
+            if followers:
+                self._track(asyncio.create_task(self._refresh_after_trade(expiry, [f["license_key"] for f in followers])))
+        except Exception as e:
+            print(f"[SIGNAL] FATAL: {e}", flush=True)
 
 
 copy_manager = QuotexCopyManager()
