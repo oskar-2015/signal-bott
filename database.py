@@ -7,6 +7,24 @@ from cryptography.fernet import Fernet, InvalidToken
 _BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH") or os.path.join(_BASE, "oskar.db")
 
+# ═══════════════════════════════════════════════════════════════
+# إعدادات Turso (قاعدة بيانات دائمة مجانية)
+# ═══════════════════════════════════════════════════════════════
+_TURSO_URL = os.environ.get("TURSO_DATABASE_URL", "").strip()
+_TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+
+if _TURSO_URL and _TURSO_TOKEN:
+    try:
+        import libsql_experimental as libsql
+        _USE_TURSO = True
+        print(f"[DB] ✅ Using Turso: {_TURSO_URL[:40]}...", flush=True)
+    except ImportError as e:
+        print(f"[DB] ⚠️ libsql-experimental not installed: {e}", flush=True)
+        _USE_TURSO = False
+else:
+    _USE_TURSO = False
+    print("[DB] ⚠️ No Turso config - using ephemeral SQLite (data will be lost on restart)", flush=True)
+
 _enc_key = os.environ.get("ENCRYPTION_KEY")
 if not _enc_key:
     raise RuntimeError("ENCRYPTION_KEY env var is missing")
@@ -16,7 +34,6 @@ _fernet = Fernet(_enc_key.encode())
 def encrypt(text):
     if not text:
         return None
-    # حماية إضافية: تحويل أي كائن إلى نص قبل التشفير
     if not isinstance(text, str):
         text = str(text)
     return _fernet.encrypt(text.encode()).decode()
@@ -36,6 +53,11 @@ def now_iso():
 
 
 def get_db():
+    """يُرجع اتصال قاعدة البيانات: Turso إن كان مضبوطاً، وإلا SQLite محلي."""
+    if _USE_TURSO:
+        conn = libsql.connect(database=_TURSO_URL, auth_token=_TURSO_TOKEN)
+        conn.row_factory = sqlite3.Row
+        return conn
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     return conn
@@ -43,7 +65,7 @@ def get_db():
 
 def init_db():
     folder = os.path.dirname(DB_PATH)
-    if folder:
+    if folder and not _USE_TURSO:
         os.makedirs(folder, exist_ok=True)
 
     conn = get_db()
@@ -86,7 +108,7 @@ def init_db():
     
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_auto_trading INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
     cursor.execute("""
@@ -111,6 +133,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    print(f"[DB] ✅ init_db completed (turso={_USE_TURSO})", flush=True)
 
 
 def get_setting(key, default=None):
