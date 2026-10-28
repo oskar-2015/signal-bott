@@ -30,9 +30,10 @@ LEAD_TIME_SEC = 60
 RSI_PERIOD = 14
 EMA_FAST = 9
 EMA_SLOW = 21
-MIN_PAYOUT = 70
+MIN_PAYOUT = 60  # ← خُفّض من 70 إلى 60
 CANDLE_HISTORY_SECONDS = 10800
-MIN_STRENGTH = 15
+MIN_STRENGTH = 12  # ← خُفّض من 15 إلى 12
+RECONNECT_AFTER_CYCLES = 20  # ← إعادة اتصال كل 20 دورة
 
 PLATFORM_LINK = "https://broker-qx.pro/sign-up/?lid=2384798"
 CHANNEL_LINK = 'قناة أوسكار 🔥'
@@ -64,10 +65,6 @@ def is_crypto(asset_name):
 
 
 def load_master_session():
-    """
-    يُحمّل جلسة الماستر فقط من قاعدة البيانات.
-    لا يستخدم qx_session.json ولا متغيرات البيئة القديمة.
-    """
     try:
         master_ssid = get_secret_setting("master_ssid")
         master_cookies = get_secret_setting("master_cookies")
@@ -126,13 +123,12 @@ def analyze_strength(closes):
 
     rsi_strength = abs(last_rsi - 50)
     strength = rsi_strength + (ema_diff_pct * 10)
-
     return direction, strength
 
 
 def send_telegram(asset, direction, entry_time, duration_min):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("telegram skipped: missing credentials", flush=True)
+        print("[TG] skipped: missing credentials", flush=True)
         return
     arrow = "صعود Call \U0001F7E2" if direction == "up" else "هبوط Put \U0001F534"
     text = (
@@ -152,9 +148,9 @@ def send_telegram(asset, direction, entry_time, duration_min):
             "text": text,
             "parse_mode": "HTML"
         }, timeout=15)
-        print(f"telegram sent: {asset} {direction} (status: {r.status_code})", flush=True)
+        print(f"[TG] sent: {asset} {direction} (status={r.status_code})", flush=True)
     except Exception as e:
-        print(f"telegram error: {e}", flush=True)
+        print(f"[TG] error: {e}", flush=True)
 
 
 async def connect_client():
@@ -183,36 +179,76 @@ async def connect_client():
     return client, "OK"
 
 
+async def close_client(client):
+    if client is None:
+        return
+    try:
+        await client.close()
+    except Exception:
+        pass
+
+
 async def get_top_open_assets(client, n=NUM_PAIRS, min_payout=MIN_PAYOUT):
     try:
         all_assets = client.get_all_asset_name()
     except Exception as e:
-        print(f"asset list error: {e}", flush=True)
+        print(f"[ASSETS] get_all_asset_name error: {e}", flush=True)
         return []
+    
+    if not all_assets:
+        print("[ASSETS] empty list - reconnect needed", flush=True)
+        return []
+    
     candidates = []
+    checked = 0
+    failed = 0
+    not_open = 0
+    low_payout = 0
     for item in all_assets:
-        name = item[0]
-        if is_crypto(name):
-            continue
         try:
-            result = await client.check_asset_open(name)
-            is_open = result[1][2] if len(result) > 1 else False
-            payout = result[0][5] if len(result[0]) > 5 else 0
-            if is_open and payout >= min_payout:
-                candidates.append((name, payout))
+            name = item[0]
         except Exception:
             continue
+        if is_crypto(name):
+            continue
+        checked += 1
+        try:
+            result = await asyncio.wait_for(client.check_asset_open(name), timeout=8)
+            is_open = result[1][2] if len(result) > 1 else False
+            payout = result[0][5] if len(result[0]) > 5 else 0
+            if not is_open:
+                not_open += 1
+                continue
+            if payout < min_payout:
+                low_payout += 1
+                continue
+            candidates.append((name, payout))
+        except asyncio.TimeoutError:
+            failed += 1
+            continue
+        except Exception:
+            failed += 1
+            continue
+    
+    print(f"[ASSETS] checked={checked} failed={failed} not_open={not_open} low_payout={low_payout} candidates={len(candidates)}", flush=True)
     candidates.sort(key=lambda x: x[1], reverse=True)
     return candidates[:n]
 
 
 async def get_closes(client, asset):
     try:
-        candles = await client.get_historical_candles(
-            asset, amount_of_seconds=CANDLE_HISTORY_SECONDS, period=60, max_workers=3
+        candles = await asyncio.wait_for(
+            client.get_historical_candles(asset, amount_of_seconds=CANDLE_HISTORY_SECONDS, period=60, max_workers=3),
+            timeout=15
         )
     except Exception:
-        candles = await client.get_candles(asset, int(time.time()), CANDLE_HISTORY_SECONDS, 60)
+        try:
+            candles = await asyncio.wait_for(
+                client.get_candles(asset, int(time.time()), CANDLE_HISTORY_SECONDS, 60),
+                timeout=15
+            )
+        except Exception:
+            return []
     return clean_candles(candles)
 
 
@@ -223,7 +259,7 @@ async def pick_best_signal(client, assets):
             closes = await get_closes(client, name)
             direction, strength = analyze_strength(closes)
         except Exception as e:
-            print(f"candles error {name}: {e}", flush=True)
+            print(f"[PICK] {name} candles error: {e}", flush=True)
             continue
         if strength < MIN_STRENGTH:
             continue
@@ -233,49 +269,54 @@ async def pick_best_signal(client, assets):
 
 
 async def main_loop():
-    """
-    حلقة التداول. تستيقظ تلقائياً عند ربط الماستر.
-    عند الفشل، تنتظر أوقات طويلة (5-60 دقيقة) لحماية IP من الحظر.
-    """
     client = None
     cycle = 0
-    fail_streak = 0
+    consecutive_failures = 0
+    cycles_with_client = 0
 
     while True:
         try:
+            # ★ إعادة اتصال دورية لتفادي WebSocket الميت
+            if client is not None and cycles_with_client >= RECONNECT_AFTER_CYCLES:
+                print(f"[BOT] forcing reconnect after {cycles_with_client} cycles", flush=True)
+                await close_client(client)
+                client = None
+                cycles_with_client = 0
+
             if client is None:
-                # تحقق من وجود جلسة ماستر
                 _ck, _ss = load_master_session()
                 if not _ss:
                     print("[BOT] master not linked yet, waiting 2 minutes...", flush=True)
-                    fail_streak = 0
+                    consecutive_failures = 0
                     await asyncio.sleep(120)
                     continue
                 
                 client, err = await connect_client()
                 if client is None:
-                    fail_streak += 1
-                    if fail_streak >= 5:
-                        wait_s = 3600   # 60 دقيقة
-                    elif fail_streak >= 3:
-                        wait_s = 1800   # 30 دقيقة
-                    elif fail_streak >= 2:
-                        wait_s = 900    # 15 دقيقة
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        wait_s = 3600
+                    elif consecutive_failures >= 3:
+                        wait_s = 1800
+                    elif consecutive_failures >= 2:
+                        wait_s = 900
                     else:
-                        wait_s = 300    # 5 دقائق
-                    
-                    print(f"[BOT] connect failed ({err}) - attempt {fail_streak} - waiting {wait_s}s to protect IP", flush=True)
+                        wait_s = 300
+                    print(f"[BOT] connect failed ({err}) - attempt {consecutive_failures} - waiting {wait_s}s", flush=True)
                     await asyncio.sleep(wait_s)
                     continue
-                
-                fail_streak = 0
+                consecutive_failures = 0
+                cycles_with_client = 0
             
+            cycles_with_client += 1
             cycle += 1
             print(f"[BOT] cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}", flush=True)
             
             top_assets = await get_top_open_assets(client)
             if not top_assets:
-                print("[BOT] no open assets this cycle", flush=True)
+                print("[BOT] no candidates - forcing reconnect next cycle", flush=True)
+                await close_client(client)
+                client = None
                 await asyncio.sleep(LEAD_TIME_SEC)
                 continue
 
@@ -286,14 +327,14 @@ async def main_loop():
                 continue
 
             asset, payout, strength, direction = best
-            print(f"[BOT] signal: {asset} {direction} (strength {strength:.2f})", flush=True)
+            print(f"[BOT] SIGNAL: {asset} {direction} strength={strength:.2f} payout={payout}", flush=True)
 
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
             
             if get_setting("admin_bot_enabled", "1") == "1":
                 send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
             else:
-                print("[BOT] telegram disabled by admin - not sending", flush=True)
+                print("[BOT] telegram disabled by admin", flush=True)
 
             if get_setting("admin_auto_enabled", "1") == "1":
                 trade_dir = "call" if direction == "up" else "put"
@@ -301,7 +342,7 @@ async def main_loop():
                     asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
                 ))
             else:
-                print("[BOT] auto trading disabled by admin - not copying", flush=True)
+                print("[BOT] auto trading disabled by admin", flush=True)
 
             wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
             print(f"[BOT] waiting {wait_seconds}s", flush=True)
@@ -309,8 +350,9 @@ async def main_loop():
 
         except Exception as e:
             print(f"[BOT] loop error: {e}, reconnecting in 15 minutes", flush=True)
+            await close_client(client)
             client = None
-            fail_streak += 1
+            consecutive_failures += 1
             await asyncio.sleep(900)
 
 
