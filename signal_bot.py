@@ -30,10 +30,10 @@ LEAD_TIME_SEC = 60
 RSI_PERIOD = 14
 EMA_FAST = 9
 EMA_SLOW = 21
-MIN_PAYOUT = 60  # ← خُفّض من 70 إلى 60
+MIN_PAYOUT = 60
 CANDLE_HISTORY_SECONDS = 10800
-MIN_STRENGTH = 12  # ← خُفّض من 15 إلى 12
-RECONNECT_AFTER_CYCLES = 20  # ← إعادة اتصال كل 20 دورة
+MIN_STRENGTH = 12
+RECONNECT_AFTER_CYCLES = 20
 
 PLATFORM_LINK = "https://broker-qx.pro/sign-up/?lid=2384798"
 CHANNEL_LINK = 'قناة أوسكار 🔥'
@@ -276,7 +276,6 @@ async def main_loop():
 
     while True:
         try:
-            # ★ إعادة اتصال دورية لتفادي WebSocket الميت
             if client is not None and cycles_with_client >= RECONNECT_AFTER_CYCLES:
                 print(f"[BOT] forcing reconnect after {cycles_with_client} cycles", flush=True)
                 await close_client(client)
