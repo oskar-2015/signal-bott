@@ -4,3 +4,4 @@ git+https://github.com/cleitonleonel/pyquotex.git
 requests>=2.31.0
 pandas>=2.0.0
 waitress>=3.0.0
+libsql-experimental>=0.0.60
