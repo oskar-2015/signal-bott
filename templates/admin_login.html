@@ -1,31 +1,21 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oscar Trader AI - دخول المشرف</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <div class="logo">OSCAR<span>TRADER AI</span></div>
-        <h1>🔐 دخول المشرف</h1>
-        <p>هذه الصفحة مخصصة للمشرف فقط</p>
+{% extends "base.html" %}
+{% block title %}Oscar Trader AI — دخول المشرف{% endblock %}
+{% block body %}
+<main class="center-stage">
+  <div class="card narrow">
+    <div class="logo-big">OSCAR <b>ADMIN</b></div>
+    <p class="tagline">هذه الصفحة للمشرف فقط</p>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="alert {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
+    {% if admin_configured is defined and not admin_configured %}
+    <div class="alert error">لم يتم ضبط ADMIN_PASSWORD في Render، لذلك الدخول معطّل.</div>
+    {% endif %}
 
-        <form action="/admin" method="POST">
-            <input type="password" name="password" placeholder="كلمة مرور المشرف" required autocomplete="off">
-            <button type="submit">دخول</button>
-        </form>
-
-        <a href="/" class="logout">← العودة للموقع</a>
-    </div>
-</body>
-</html>
+    <form action="/admin" method="POST">
+      <label class="field" for="password">كلمة مرور المشرف</label>
+      <input id="password" type="password" name="password" required autocomplete="current-password">
+      <button class="btn primary block" type="submit" style="margin-top:18px">دخول</button>
+    </form>
+    <a href="/" class="link-quiet" style="margin-top:12px">العودة للموقع</a>
+  </div>
+</main>
+{% endblock %}

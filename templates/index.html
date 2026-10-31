@@ -1,45 +1,29 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oscar Trader AI - تسجيل الدخول</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <div class="logo">OSCAR<span>TRADER AI</span></div>
-        <h1>أدخل مفتاح التفعيل</h1>
-        <p>للوصول إلى لوحة التداول الآلي، يرجى إدخال مفتاح التفعيل الخاص بك</p>
+{% extends "base.html" %}
+{% block title %}Oscar Trader AI — تسجيل الدخول{% endblock %}
+{% block body %}
+<main class="center-stage">
+  <div class="card narrow">
+    <div class="logo-big">OSCAR <b>TRADER AI</b></div>
+    <p class="tagline">إشارات وتداول آلي ونسخ صفقات على Quotex</p>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="alert {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
+    <form action="/activate" method="POST" autocomplete="off">
+      <label class="field" for="license_key">مفتاح التفعيل</label>
+      <input id="license_key" class="ltr" type="text" name="license_key" placeholder="OSCAR-XXXX-XXXX-XXXX"
+             required autocapitalize="characters" autocomplete="off" spellcheck="false">
+      <p class="hint">المفتاح يصلك من المشرف. يرتبط بجهازك عند أول دخول.</p>
+      <button class="btn primary block" type="submit" style="margin-top:18px">دخول</button>
+    </form>
 
-        <form action="/activate" method="POST">
-            <input type="text" name="license_key" placeholder="OSCAR-XXXX-XXXX-XXXX" required autocomplete="off" autocapitalize="characters">
-            <button type="submit">تفعيل الدخول</button>
-        </form>
+    <hr style="border:0;border-top:1px solid var(--line);margin:26px 0 20px">
 
-        <hr style="border-color: #222; margin: 25px 0;">
+    <h2 style="font-size:16px">ليس لديك تطبيق الربط؟</h2>
+    <p class="sub" style="margin-bottom:12px">تطبيق Oscar Linker يربط حساب Quotex بسهولة من هاتفك.</p>
+    <a class="btn block" href="{{ apk_url }}">تحميل التطبيق (APK)</a>
 
-        <h3 style="font-size: 16px; margin-bottom: 12px;">📱 ليس لديك حساب مربوط؟</h3>
-        <p style="font-size: 13px; color: #888; margin-bottom: 15px;">
-            حمّل تطبيق Oscar Linker لربط حساب Quotex بسهولة من هاتفك
-        </p>
-        <a href="{{ apk_url }}" 
-           style="display:block; text-align:center; padding:14px; background:#1e1e1e; color:#d4af37; text-decoration:none; border-radius:10px; border:1px solid #333; font-weight:700;">
-            📥 تحميل التطبيق (APK)
-        </a>
-
-        <p class="disclaimer">
-            تنبيه: التداول في الخيارات الثنائية ينطوي على مخاطر عالية وقد تخسر أموالك بالكامل.
-            الإشارات تحليل آلي وليست نصيحة مالية ولا تضمن أي ربح، وأنت المسؤول الوحيد عن قراراتك.
-        </p>
-    </div>
-</body>
-</html>
+    <p class="disclaimer" style="margin-top:22px">
+      تنبيه: التداول في الخيارات الثنائية عالي المخاطر وقد تخسر رأس مالك كاملاً.
+      الإشارات تحليل آلي وليست نصيحة مالية ولا تضمن ربحاً.
+    </p>
+  </div>
+</main>
+{% endblock %}

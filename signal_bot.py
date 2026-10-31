@@ -1,28 +1,19 @@
 # -*- coding: utf-8 -*-
 import os
-import json
 import time
+import random
 import asyncio
 from threading import Thread
 from datetime import datetime, timedelta
 
-import requests
 import pandas as pd
 from waitress import serve
 from pyquotex.stable_api import Quotex
 
 from app import app as web_app
 from quotex_manager import copy_manager
-from database import get_setting, get_secret_setting
-
-try:
-    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-except ImportError:
-    TELEGRAM_BOT_TOKEN = None
-    TELEGRAM_CHAT_ID = None
-
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or TELEGRAM_CHAT_ID
+from database import get_setting, set_setting, get_secret_setting
+from notify import send_telegram_text, telegram_configured
 
 NUM_PAIRS = 15
 TRADE_DURATION_MIN = 1
@@ -33,7 +24,7 @@ EMA_SLOW = 21
 MIN_PAYOUT = 60
 CANDLE_HISTORY_SECONDS = 10800
 MIN_STRENGTH = 12
-RECONNECT_AFTER_CYCLES = 20
+RECONNECT_AFTER_CYCLES = 30
 
 PLATFORM_LINK = "https://broker-qx.pro/sign-up/?lid=2384798"
 CHANNEL_LINK = 'قناة أوسكار 🔥'
@@ -43,6 +34,29 @@ CRYPTO_SYMBOLS = [
     "BNB", "TON", "DOGE", "AVA", "AVAX", "ATO", "ATOM", "DAS", "DASH",
     "ZEC", "XLM", "TRX", "LINK", "UNI", "AXS", "MATIC", "SHIB", "TRUMP"
 ]
+
+
+# ───────────────────────── أدوات مساعدة آمنة ─────────────────────────
+def report(key, value):
+    """يكتب حالة البوت ليظهرها المشرف في اللوحة. لا يوقف البوت إذا فشلت الكتابة."""
+    try:
+        set_setting(key, str(value))
+    except Exception as e:
+        print(f"[BOT] status write failed: {e}", flush=True)
+
+
+def set_status(text):
+    print(f"[BOT] {text}", flush=True)
+    report("bot_status", text)
+    report("bot_status_at", datetime.utcnow().isoformat(timespec="seconds"))
+
+
+def safe_setting(key, default):
+    try:
+        return get_setting(key, default)
+    except Exception as e:
+        print(f"[BOT] read setting {key} failed: {e}", flush=True)
+        return default
 
 
 def run_flask():
@@ -78,6 +92,7 @@ def load_master_session():
         return None, None
 
 
+# ───────────────────────── التحليل ─────────────────────────
 def clean_candles(candles):
     items = []
     for c in candles:
@@ -97,6 +112,8 @@ def clean_candles(candles):
 
 def analyze_strength(closes):
     if len(closes) < max(EMA_SLOW, RSI_PERIOD) + 5:
+        if not closes:
+            return "up", 0
         up = closes[-1] >= closes[0]
         return ("up" if up else "down"), 0
 
@@ -126,10 +143,11 @@ def analyze_strength(closes):
     return direction, strength
 
 
+# ───────────────────────── تيليجرام ─────────────────────────
 def send_telegram(asset, direction, entry_time, duration_min):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not telegram_configured():
         print("[TG] skipped: missing credentials", flush=True)
-        return
+        return False
     arrow = "صعود Call \U0001F7E2" if direction == "up" else "هبوط Put \U0001F534"
     text = (
         "\U0001F680 إشارة قوية مكتشفة!\n"
@@ -141,23 +159,17 @@ def send_telegram(asset, direction, entry_time, duration_min):
         f"{PLATFORM_LINK}\n\n"
         f"{CHANNEL_LINK}"
     )
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        r = requests.post(url, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        }, timeout=15)
-        print(f"[TG] sent: {asset} {direction} (status={r.status_code})", flush=True)
-    except Exception as e:
-        print(f"[TG] error: {e}", flush=True)
+    ok, info = send_telegram_text(text)
+    print(f"[TG] {'sent' if ok else 'FAILED'}: {asset} {direction} ({info})", flush=True)
+    return ok
 
 
+# ───────────────────────── الاتصال بـ Quotex ─────────────────────────
 async def connect_client():
     cookies_str, ssid = load_master_session()
     if not ssid:
         return None, "master_not_linked"
-    
+
     client = Quotex(email="x@x.com", password="x", lang="en", host="quotex.com")
     client.set_session(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -171,10 +183,10 @@ async def connect_client():
         return None, "timeout"
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
-    
+
     if not check:
         return None, f"rejected: {reason}"
-    
+
     print("✅ signal bot connected successfully", flush=True)
     return client, "OK"
 
@@ -194,11 +206,11 @@ async def get_top_open_assets(client, n=NUM_PAIRS, min_payout=MIN_PAYOUT):
     except Exception as e:
         print(f"[ASSETS] get_all_asset_name error: {e}", flush=True)
         return []
-    
+
     if not all_assets:
         print("[ASSETS] empty list - reconnect needed", flush=True)
         return []
-    
+
     candidates = []
     checked = 0
     failed = 0
@@ -229,7 +241,7 @@ async def get_top_open_assets(client, n=NUM_PAIRS, min_payout=MIN_PAYOUT):
         except Exception:
             failed += 1
             continue
-    
+
     print(f"[ASSETS] checked={checked} failed={failed} not_open={not_open} low_payout={low_payout} candidates={len(candidates)}", flush=True)
     candidates.sort(key=lambda x: x[1], reverse=True)
     return candidates[:n]
@@ -268,6 +280,16 @@ async def pick_best_signal(client, assets):
     return best
 
 
+def backoff_seconds(failures):
+    if failures >= 5:
+        return 3600
+    if failures >= 3:
+        return 1800
+    if failures >= 2:
+        return 900
+    return 300
+
+
 async def main_loop():
     client = None
     cycle = 0
@@ -276,6 +298,13 @@ async def main_loop():
 
     while True:
         try:
+            # إذا كان Quotex حاظراً الاتصال مؤقتاً (429) ننتظر ولا نضغط عليه
+            blocked = copy_manager.rate_limit_remaining()
+            if blocked > 0 and client is None:
+                set_status(f"Quotex حظر الاتصال مؤقتاً (429) — انتظار {blocked // 60 + 1} دقيقة")
+                await asyncio.sleep(min(blocked + 5, 600))
+                continue
+
             if client is not None and cycles_with_client >= RECONNECT_AFTER_CYCLES:
                 print(f"[BOT] forcing reconnect after {cycles_with_client} cycles", flush=True)
                 await close_client(client)
@@ -285,43 +314,42 @@ async def main_loop():
             if client is None:
                 _ck, _ss = load_master_session()
                 if not _ss:
-                    print("[BOT] master not linked yet, waiting 2 minutes...", flush=True)
+                    set_status("بانتظار ربط حساب المشرف (من تطبيق المدير)")
                     consecutive_failures = 0
                     await asyncio.sleep(120)
                     continue
-                
+
+                set_status("جاري الاتصال بـ Quotex...")
                 client, err = await connect_client()
                 if client is None:
                     consecutive_failures += 1
-                    if consecutive_failures >= 5:
-                        wait_s = 3600
-                    elif consecutive_failures >= 3:
-                        wait_s = 1800
-                    elif consecutive_failures >= 2:
-                        wait_s = 900
-                    else:
-                        wait_s = 300
-                    print(f"[BOT] connect failed ({err}) - attempt {consecutive_failures} - waiting {wait_s}s", flush=True)
+                    if copy_manager.is_rate_limit_error(err) or copy_manager.rate_limit_remaining() > 0:
+                        copy_manager.sniffed_429()
+                    wait_s = backoff_seconds(consecutive_failures)
+                    wait_s = max(wait_s, copy_manager.rate_limit_remaining())
+                    wait_s += random.randint(0, 60)
+                    set_status(f"فشل الاتصال ({str(err)[:80]}) — محاولة بعد {wait_s // 60} دقيقة")
                     await asyncio.sleep(wait_s)
                     continue
                 consecutive_failures = 0
                 cycles_with_client = 0
-            
+                copy_manager.note_connect_ok()
+
             cycles_with_client += 1
             cycle += 1
-            print(f"[BOT] cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}", flush=True)
-            
+            set_status(f"يعمل — الدورة {cycle}، يبحث عن إشارة")
+
             top_assets = await get_top_open_assets(client)
             if not top_assets:
-                print("[BOT] no candidates - forcing reconnect next cycle", flush=True)
+                print("[BOT] no candidates - reconnect next cycle", flush=True)
                 await close_client(client)
                 client = None
-                await asyncio.sleep(LEAD_TIME_SEC)
+                await asyncio.sleep(LEAD_TIME_SEC * 2)
                 continue
 
             best = await pick_best_signal(client, top_assets)
             if best is None:
-                print("[BOT] no strong signal this cycle", flush=True)
+                set_status("يعمل — لا توجد إشارة قوية في هذه الدورة")
                 await asyncio.sleep(LEAD_TIME_SEC)
                 continue
 
@@ -329,13 +357,14 @@ async def main_loop():
             print(f"[BOT] SIGNAL: {asset} {direction} strength={strength:.2f} payout={payout}", flush=True)
 
             entry_time = (datetime.now() + timedelta(seconds=LEAD_TIME_SEC)).strftime("%H:%M")
-            
-            if get_setting("admin_bot_enabled", "1") == "1":
-                send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
+            sent = False
+
+            if safe_setting("admin_bot_enabled", "1") == "1":
+                sent = send_telegram(asset, direction, entry_time, TRADE_DURATION_MIN)
             else:
                 print("[BOT] telegram disabled by admin", flush=True)
 
-            if get_setting("admin_auto_enabled", "1") == "1":
+            if safe_setting("admin_auto_enabled", "1") == "1":
                 trade_dir = "call" if direction == "up" else "put"
                 copy_manager.submit(copy_manager.broadcast_signal(
                     asset, trade_dir, TRADE_DURATION_MIN * 60, LEAD_TIME_SEC
@@ -343,16 +372,20 @@ async def main_loop():
             else:
                 print("[BOT] auto trading disabled by admin", flush=True)
 
+            arrow = "صعود" if direction == "up" else "هبوط"
+            report("last_signal", f"{asset} — {arrow} — {'أُرسلت لتيليجرام' if sent else 'لم تُرسل لتيليجرام'}")
+            report("last_signal_at", datetime.utcnow().isoformat(timespec="seconds"))
+
             wait_seconds = (TRADE_DURATION_MIN * 60) + LEAD_TIME_SEC
-            print(f"[BOT] waiting {wait_seconds}s", flush=True)
             await asyncio.sleep(wait_seconds)
 
         except Exception as e:
-            print(f"[BOT] loop error: {e}, reconnecting in 15 minutes", flush=True)
+            consecutive_failures += 1
+            wait_s = min(300 * consecutive_failures, 1800)
+            set_status(f"خطأ غير متوقع ({str(e)[:80]}) — إعادة المحاولة بعد {wait_s // 60} دقيقة")
             await close_client(client)
             client = None
-            consecutive_failures += 1
-            await asyncio.sleep(900)
+            await asyncio.sleep(wait_s)
 
 
 if __name__ == "__main__":
@@ -366,6 +399,7 @@ if __name__ == "__main__":
         print("ℹ️  Signal bot DISABLED (ENABLE_SIGNALS != true)", flush=True)
         print("ℹ️  Web + copy trading still work normally", flush=True)
         print("=" * 70, flush=True)
+        set_status("متوقف — ENABLE_SIGNALS ليست true في Render")
         try:
             while True:
                 time.sleep(3600)
@@ -374,7 +408,6 @@ if __name__ == "__main__":
     else:
         print("=" * 70, flush=True)
         print("✅ Signal bot ENABLED", flush=True)
-        print("ℹ️  Will wait until master account is linked", flush=True)
         print("=" * 70, flush=True)
         try:
             asyncio.run(main_loop())

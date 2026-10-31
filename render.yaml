@@ -7,11 +7,23 @@ services:
     startCommand: python signal_bot.py
     healthCheckPath: /health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
       - key: ENCRYPTION_KEY
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: FLASK_SECRET_KEY
         generateValue: true
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      - key: ENABLE_SIGNALS
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: APK_DOWNLOAD_URL
+        sync: false

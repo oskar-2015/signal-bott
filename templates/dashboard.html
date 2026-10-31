@@ -1,264 +1,473 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oscar Trader AI - لوحة التحكم</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <div class="logo">OSCAR<span>TRADER AI</span></div>
-        <h1>مرحباً بك 👋</h1>
+{% extends "base.html" %}
+{% block title %}Oscar Trader AI — لوحتي{% endblock %}
+{% block body %}
+<header class="topbar">
+  <a class="brand" href="/dashboard">OSCAR <b>TRADER AI</b></a>
+  <div class="top-actions">
+    <button class="key-chip" id="keyChip" type="button" title="نسخ المفتاح">
+      <span id="keyText"></span><span aria-hidden="true">⧉</span>
+    </button>
+    <button class="icon-btn" id="logoutBtn" type="button" aria-label="تسجيل الخروج" title="تسجيل الخروج">⏻</button>
+  </div>
+</header>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="alert {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
+<main class="wrap">
+  <noscript><div class="card">هذه اللوحة تحتاج تفعيل JavaScript في المتصفح.</div></noscript>
 
-        {% if user.last_notification %}
-        <div class="card notification-card" id="notificationCard">
-            <div class="notification-text">{{ user.last_notification }}</div>
-            <form action="/clear_notification" method="POST">
-                <button type="submit" class="btn-primary">حسناً، فهمت</button>
-            </form>
-        </div>
-        {% endif %}
+  <div class="notice hidden" id="notice" role="alert">
+    <span id="noticeText"></span>
+    <button class="btn small" id="noticeBtn" type="button">حسناً</button>
+  </div>
 
-        <div class="card">
-            <h3>🔑 مفتاح التفعيل</h3>
-            <p class="hint" style="text-align: center;">
-                مفتاحك: <code>{{ user.license_key }}</code>
-            </p>
-        </div>
+  <!-- الخطوات -->
+  <section class="card" aria-label="خطوات الاستخدام">
+    <ol class="steps" id="steps">
+      <li class="step" id="st1"><span class="step-dot">1</span>اربط حسابك</li>
+      <li class="step" id="st2"><span class="step-dot">2</span>اضبط الإعدادات</li>
+      <li class="step" id="st3"><span class="step-dot">3</span>شغّل</li>
+    </ol>
+  </section>
 
-        <div class="card {% if not user.quotex_ssid %}highlight{% endif %}">
-            <h3>🔗 ربط حساب Quotex</h3>
-            {% if user.quotex_ssid %}
-                <p style="color: #81c784; text-align: center; margin-bottom: 10px; font-size: 16px;">
-                    ✅ الحساب مرتبط بنجاح
-                </p>
-                {% if user.quotex_email %}
-                <p class="hint" style="text-align: center;">
-                    البريد: <code>{{ user.quotex_email }}</code>
-                </p>
-                {% endif %}
-            {% else %}
-                <p style="text-align: center; color: #f0e0a0; font-weight: 700; margin-bottom: 20px;">
-                    لربط حسابك، اضغط الزر أدناه وسجّل دخولك إلى Quotex
-                </p>
+  <!-- 1) الربط -->
+  <section class="card" id="cardLink">
+    <h2>حساب Quotex</h2>
+    <p class="sub" id="linkSub">جاري التحميل…</p>
+    <div id="linkBody"></div>
+  </section>
 
-                <button onclick="handleConnect()" id="connectBtn" class="btn-primary"
-                        style="display:none; width:100%; padding:16px; font-size:16px; margin-bottom:15px;">
-                    🔗 ربط حساب Quotex الآن
-                </button>
+  <!-- 2) الإعدادات -->
+  <section class="card is-locked" id="cardSettings">
+    <h2>الإعدادات</h2>
+    <p class="sub" id="settingsSub">اربط حسابك أولاً لتفتح الإعدادات.</p>
 
-                <a href="{{ apk_url }}" id="apkBtn" class="btn-primary"
-                   style="display:block; text-align:center; padding:16px; text-decoration:none; border-radius:10px; font-weight:700; margin-bottom:15px; font-size:16px;">
-                    📥 تحميل تطبيق الربط (APK)
-                </a>
-
-                <div style="background: #0a0a0a; padding: 18px; border-radius: 10px; border: 1px solid #222;">
-                    <h4 style="color: #d4af37; text-align: right; margin-bottom: 12px; font-size: 15px;">خطوات الربط:</h4>
-                    <ol style="color: #ccc; font-size: 14px; line-height: 2; padding-right: 20px;">
-                        <li>اضغط زر "ربط حساب Quotex"</li>
-                        <li>سجّل دخولك داخل التطبيق</li>
-                        <li>سيتم الربط تلقائياً</li>
-                    </ol>
-                </div>
-            {% endif %}
-        </div>
-
-        {% if user.quotex_ssid %}
-        <div class="card">
-            <h3>⚙️ إعدادات التداول</h3>
-            <form action="/save_settings" method="POST">
-                <label class="field-label">نوع الحساب</label>
-                <select name="account_type" id="accountType" {% if user.settings_locked %}disabled{% endif %}>
-                    <option value="demo" {% if user.account_type == 'demo' %}selected{% endif %}>حساب تجريبي (Demo)</option>
-                    <option value="live" {% if user.account_type == 'live' %}selected{% endif %}>حساب حقيقي (Live)</option>
-                </select>
-
-                <label class="field-label">طريقة الدخول</label>
-                <select name="trade_mode" id="tradeMode" {% if user.settings_locked %}disabled{% endif %}>
-                    <option value="percent" {% if user.trade_mode == 'percent' %}selected{% endif %}>نسبة مئوية من الرصيد</option>
-                    <option value="fixed" {% if user.trade_mode == 'fixed' %}selected{% endif %}>مبلغ ثابت بالدولار</option>
-                </select>
-
-                <label class="field-label" id="tradeValueLabel">قيمة الدخول</label>
-                <input type="number" name="trade_value" step="0.1" min="0.1" value="{{ user.trade_value or 1.0 }}" required {% if user.settings_locked %}disabled{% endif %}>
-                <p class="hint" id="tradeValueHint">—</p>
-
-                <label class="field-label" id="maxLossLabel">🛑 إيقاف تلقائي عند الخسارة</label>
-                <input type="number" name="max_loss_value" step="0.1" min="0" value="{{ user.max_loss_value or 0 }}" {% if user.settings_locked %}disabled{% endif %}>
-                <p class="hint">0 = تعطيل</p>
-
-                <label class="field-label" id="maxProfitLabel">✅ إيقاف تلقائي عند الربح</label>
-                <input type="number" name="max_profit_value" step="0.1" min="0" value="{{ user.max_profit_value or 0 }}" {% if user.settings_locked %}disabled{% endif %}>
-                <p class="hint">0 = تعطيل</p>
-
-                {% if not user.settings_locked %}
-                <button type="submit" class="btn-primary">💾 حفظ الإعدادات</button>
-                {% endif %}
-            </form>
-
-            {% if user.settings_locked %}
-            <form action="/unlock_settings" method="POST" style="margin-top: 10px;">
-                <button type="submit" class="btn-danger">🔓 فتح الإعدادات للتعديل</button>
-            </form>
-            {% endif %}
-        </div>
-
-        <div class="card {% if user.is_copying %}highlight{% endif %}">
-            <h3>📊 حالة التداول الآلي</h3>
-            <p style="text-align: center; margin-bottom: 15px;">
-                {% if user.is_copying %}
-                    <span class="badge active">مفعّل ✅</span>
-                {% else %}
-                    <span class="badge inactive">معطّل ⛔</span>
-                {% endif %}
-                <span id="liveIndicator" class="live-dot"></span>
-            </p>
-
-            <div class="live-stats">
-                <div class="stat-row">
-                    <span>نوع الحساب:</span>
-                    <span>{% if user.account_type == 'live' %}حقيقي{% else %}تجريبي{% endif %}</span>
-                </div>
-                <div class="stat-row">
-                    <span>الرصيد الحالي:</span>
-                    <span id="currentBalance">—</span>
-                </div>
-                <div class="stat-row">
-                    <span>رصيد البداية:</span>
-                    <span id="startBalance">—</span>
-                </div>
-                <div class="stat-row">
-                    <span>ربح / خسارة الجلسة:</span>
-                    <span id="profitLoss" class="pl-neutral">0.00</span>
-                </div>
-            </div>
-
-            <form action="/toggle_copy" method="POST" class="slow" style="margin-top: 15px;"
-                  {% if not user.is_copying and user.account_type == 'live' %}
-                  onsubmit="return confirm('أنت على وشك تفعيل التداول الآلي على حسابك الحقيقي. قد تخسر أموالك. هل أنت متأكد؟');"
-                  {% endif %}>
-                <button type="submit" class="{% if user.is_copying %}btn-danger{% else %}btn-primary{% endif %}">
-                    {% if user.is_copying %}إيقاف التداول الآلي{% else %}تفعيل التداول الآلي{% endif %}
-                </button>
-            </form>
-        </div>
-
-        <div class="card">
-            <h3>🔌 فصل الحساب</h3>
-            <p class="hint">عند فصل الحساب، سيتم مسح بيانات الجلسة.</p>
-            <form action="/unlink" method="POST">
-                <button type="submit" class="btn-danger">فصل الحساب</button>
-            </form>
-        </div>
-        {% endif %}
-
-        <a href="#" onclick="handleLogout(); return false;" class="logout">تسجيل خروج</a>
-
-        <p class="disclaimer">
-            تنبيه: التداول في الخيارات الثنائية ينطوي على مخاطر عالية وقد تخسر أموالك بالكامل.
-        </p>
+    <label class="field">نوع الحساب</label>
+    <div class="seg" id="segAccount" role="group" aria-label="نوع الحساب">
+      <button type="button" data-v="demo" aria-pressed="true">تجريبي (آمن للتجربة)</button>
+      <button type="button" data-v="live" aria-pressed="false" class="live">حقيقي (أموال حقيقية)</button>
     </div>
 
-    <script>
-        // إظهار زر الربط داخل التطبيق فقط (عند وجود OscarBridge)
-        if (window.OscarBridge && window.OscarBridge.startConnect) {
-            const cb = document.getElementById('connectBtn');
-            const ab = document.getElementById('apkBtn');
-            if (cb) cb.style.display = 'block';
-            if (ab) ab.style.display = 'none';
-        }
+    <label class="field">طريقة تحديد مبلغ الصفقة</label>
+    <div class="seg" id="segMode" role="group" aria-label="طريقة الدخول">
+      <button type="button" data-v="percent" aria-pressed="true">نسبة من رصيدك</button>
+      <button type="button" data-v="fixed" aria-pressed="false">مبلغ ثابت بالدولار</button>
+    </div>
 
-        function handleConnect() {
-            if (window.OscarBridge && window.OscarBridge.startConnect) {
-                window.OscarBridge.startConnect();
-            } else {
-                window.location.href = '{{ apk_url }}';
-            }
-        }
+    <label class="field" for="inValue"><span id="lblValue">مبلغ كل صفقة (%)</span></label>
+    <div class="stepper">
+      <button class="icon-btn" type="button" data-step="value" data-dir="1" aria-label="زيادة">+</button>
+      <input id="inValue" type="number" inputmode="decimal" step="any" min="0">
+      <button class="icon-btn" type="button" data-step="value" data-dir="-1" aria-label="إنقاص">−</button>
+    </div>
+    <div class="chips" id="chipsValue"></div>
+    <p class="hint" id="hintValue"></p>
 
-        function handleLogout() {
-            if (window.OscarBridge && window.OscarBridge.logout) {
-                window.OscarBridge.logout();
-            } else {
-                window.location.href = '/logout';
-            }
-        }
+    <div class="two-col">
+      <div>
+        <label class="field" for="inLoss"><span id="lblLoss">أوقف عند الخسارة (%)</span><small>0 = بدون حد</small></label>
+        <div class="stepper">
+          <button class="icon-btn" type="button" data-step="loss" data-dir="1" aria-label="زيادة">+</button>
+          <input id="inLoss" type="number" inputmode="decimal" step="any" min="0">
+          <button class="icon-btn" type="button" data-step="loss" data-dir="-1" aria-label="إنقاص">−</button>
+        </div>
+      </div>
+      <div>
+        <label class="field" for="inProfit"><span id="lblProfit">أوقف عند الربح (%)</span><small>0 = بدون حد</small></label>
+        <div class="stepper">
+          <button class="icon-btn" type="button" data-step="profit" data-dir="1" aria-label="زيادة">+</button>
+          <input id="inProfit" type="number" inputmode="decimal" step="any" min="0">
+          <button class="icon-btn" type="button" data-step="profit" data-dir="-1" aria-label="إنقاص">−</button>
+        </div>
+      </div>
+    </div>
+    <p class="hint" id="hintLimits"></p>
+    <p class="hint warn hidden" id="lockHint">الإعدادات مقفلة أثناء التشغيل. أوقف التشغيل لتعديلها.</p>
+  </section>
 
-        let reloading = false;
-        document.querySelectorAll('form.slow').forEach(function (f) {
-            f.addEventListener('submit', function () {
-                const b = f.querySelector('button[type=submit]');
-                if (b) setTimeout(function () { b.disabled = true; b.textContent = 'جاري التنفيذ...'; }, 50);
-            });
-        });
+  <!-- 3) التشغيل -->
+  <section class="card is-locked" id="cardRun">
+    <h2>التشغيل</h2>
+    <p class="sub">اختر ما الذي تريد أن يفعله حسابك، ثم اضغط الزر الكبير.</p>
 
-        function updateLabels() {
-            const mode = document.getElementById('tradeMode');
-            if (!mode) return;
-            const tvl = document.getElementById('tradeValueLabel');
-            const tvh = document.getElementById('tradeValueHint');
-            const mll = document.getElementById('maxLossLabel');
-            const mpl = document.getElementById('maxProfitLabel');
-            if (mode.value === 'fixed') {
-                tvl.textContent = 'قيمة الدخول ($)';
-                tvh.textContent = 'مثال: 5 = 5$ لكل صفقة';
-                mll.textContent = '🛑 إيقاف تلقائي عند الخسارة ($)';
-                mpl.textContent = '✅ إيقاف تلقائي عند الربح ($)';
-            } else {
-                tvl.textContent = 'قيمة الدخول (%)';
-                tvh.textContent = 'مثال: 1 = 1% من رصيدك';
-                mll.textContent = '🛑 إيقاف تلقائي عند الخسارة (%)';
-                mpl.textContent = '✅ إيقاف تلقائي عند الربح (%)';
-            }
-        }
-        const tme = document.getElementById('tradeMode');
-        if (tme) { tme.addEventListener('change', updateLabels); updateLabels(); }
+    <div class="seg" id="segMethod" role="group" aria-label="نوع التشغيل">
+      <button type="button" data-v="copy" aria-pressed="true">نسخ صفقات المشرف</button>
+      <button type="button" data-v="auto" aria-pressed="false">تداول آلي بالإشارات</button>
+    </div>
+    <p class="hint" id="hintMethod"></p>
 
-        function renderStats(data) {
-            if (!data || !data.ok) return;
-            document.getElementById('currentBalance').textContent = '$' + data.balance.toFixed(2);
-            document.getElementById('startBalance').textContent = '$' + data.start.toFixed(2);
-            const plEl = document.getElementById('profitLoss');
-            if (data.diff > 0) {
-                plEl.className = 'pl-positive';
-                plEl.textContent = '+$' + data.diff.toFixed(2) + ' (+' + data.pct.toFixed(2) + '%)';
-            } else if (data.diff < 0) {
-                plEl.className = 'pl-negative';
-                plEl.textContent = '-$' + Math.abs(data.diff).toFixed(2) + ' (' + data.pct.toFixed(2) + '%)';
-            } else {
-                plEl.className = 'pl-neutral';
-                plEl.textContent = '0.00';
-            }
-            if (data.notification && !document.getElementById('notificationCard') && !reloading) {
-                reloading = true;
-                setTimeout(function () { location.reload(); }, 300);
-            }
-        }
+    <div class="power-zone">
+      <button class="power" id="powerBtn" type="button"><span><span class="ico" id="powerIco">⏻</span><span id="powerTxt">ابدأ</span></span></button>
+      <div class="status-line" id="statusLine"></div>
+    </div>
 
-        async function poll() {
-            const dot = document.getElementById('liveIndicator');
-            try {
-                const r = await fetch('/api/session_stats', { cache: 'no-store' });
-                if (r.status === 401) { window.location.href = '/'; return; }
-                renderStats(await r.json());
-                if (dot) dot.style.opacity = '1';
-            } catch (e) {
-                if (dot) dot.style.opacity = '0.3';
-            }
-        }
-        if (document.getElementById('currentBalance')) {
-            poll();
-            setInterval(poll, 10000);
-        }
-    </script>
-</body>
-</html>
+    <div class="stats" id="stats">
+      <div class="stat"><span class="v" id="stBal">—</span><span class="l">الرصيد الحالي</span></div>
+      <div class="stat"><span class="v" id="stStart">—</span><span class="l">رصيد البداية</span></div>
+      <div class="stat"><span class="v" id="stPL">—</span><span class="l">ربح / خسارة الجلسة</span></div>
+    </div>
+    <p class="hint" id="statsNote" style="text-align:center"></p>
+  </section>
+
+  <a href="#" class="link-quiet" id="logoutLink">تسجيل الخروج</a>
+  <p class="disclaimer">
+    تنبيه: التداول في الخيارات الثنائية عالي المخاطر وقد تخسر رأس مالك كاملاً. الإشارات والنسخ الآلي لا يضمنان ربحاً،
+    وأنت المسؤول عن قراراتك. ابدأ بالحساب التجريبي.
+  </p>
+</main>
+
+<dialog id="dlg">
+  <h3 id="dlgTitle"></h3>
+  <p id="dlgText"></p>
+  <div class="row">
+    <button class="btn" type="button" id="dlgNo">إلغاء</button>
+    <button class="btn primary" type="button" id="dlgYes">تأكيد</button>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+  var KEY = {{ license_key|tojson }};
+  var APK = {{ apk_url|tojson }};
+  var $ = function (id) { return document.getElementById(id); };
+
+  var S = null;                 // الحالة القادمة من الخادم
+  var ui = { account: 'demo', mode: 'percent', value: 1, loss: 0, profit: 0, method: 'copy' };
+  var uiReady = false, busy = false, statsTimer = 0, lastStats = null;
+
+  /* ---------- أدوات ---------- */
+  function api(path, opts) {
+    opts = opts || {};
+    var init = { method: opts.method || 'GET', cache: 'no-store', headers: {} };
+    if (opts.body) { init.method = 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
+    return fetch(path, init).then(function (r) {
+      if (r.status === 401) { window.location.href = '/'; return Promise.reject(new Error('unauthorized')); }
+      return r.json().catch(function () { return { ok: false, error: 'رد غير مفهوم من الخادم' }; });
+    });
+  }
+  function money(n) { return '$' + Number(n).toFixed(2); }
+  function friendly(err) {
+    err = String(err || '');
+    if (err.indexOf('rate_limited') > -1) return 'Quotex يحدّ الاتصال مؤقتاً. سيعود الاتصال تلقائياً بعد قليل.';
+    if (err.indexOf('cooldown') > -1) return 'نعيد محاولة الاتصال بحسابك بعد قليل.';
+    if (err.indexOf('no_session') > -1) return 'اربط حسابك أولاً.';
+    if (err.indexOf('timeout') > -1) return 'انتهت مهلة الاتصال بـ Quotex. حاول مرة أخرى.';
+    return err || 'تعذر الاتصال';
+  }
+  function isRunning() { return !!(S && (S.is_copying || S.is_auto_trading)); }
+
+  function confirmDialog(title, text, okLabel, danger) {
+    return new Promise(function (resolve) {
+      var d = $('dlg');
+      $('dlgTitle').textContent = title;
+      $('dlgText').textContent = text;
+      var yes = $('dlgYes'), no = $('dlgNo');
+      yes.textContent = okLabel || 'تأكيد';
+      yes.className = 'btn ' + (danger ? 'bad' : 'primary');
+      function done(v) { yes.onclick = no.onclick = null; d.onclose = null; if (d.open) d.close(); resolve(v); }
+      yes.onclick = function () { done(true); };
+      no.onclick = function () { done(false); };
+      d.onclose = function () { resolve(false); };
+      if (d.showModal) d.showModal(); else resolve(window.confirm(title + '\n' + text));
+    });
+  }
+
+  /* ---------- مفاتيح الاختيار ---------- */
+  function setSeg(id, value) {
+    var btns = $(id).querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-v') === value ? 'true' : 'false');
+  }
+  function bindSeg(id, key) {
+    $(id).addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || b.disabled) return;
+      ui[key] = b.getAttribute('data-v');
+      if (key === 'mode') applyModeDefaults();
+      render();
+    });
+  }
+  function applyModeDefaults() {
+    if (ui.mode === 'fixed') { if (ui.value < 1) ui.value = 5; }
+    else { if (ui.value > 100) ui.value = 1; }
+  }
+
+  /* ---------- العدّادات ---------- */
+  function stepSize() { return ui.mode === 'fixed' ? 1 : 0.5; }
+  function clampField(k) {
+    var v = Number(ui[k]); if (!isFinite(v)) v = 0;
+    if (k === 'value') {
+      if (ui.mode === 'percent') v = Math.min(100, Math.max(0.1, v)); else v = Math.max(1, v);
+    } else {
+      v = Math.max(0, v);
+      if (ui.mode === 'percent') v = Math.min(100, v);
+    }
+    ui[k] = Math.round(v * 100) / 100;
+  }
+  document.querySelectorAll('[data-step]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var k = b.getAttribute('data-step'), dir = Number(b.getAttribute('data-dir'));
+      ui[k] = Number(ui[k]) + dir * stepSize();
+      clampField(k); render();
+    });
+  });
+  [['inValue', 'value'], ['inLoss', 'loss'], ['inProfit', 'profit']].forEach(function (p) {
+    $(p[0]).addEventListener('input', function () { ui[p[1]] = this.value === '' ? 0 : Number(this.value); });
+    $(p[0]).addEventListener('change', function () { clampField(p[1]); render(); });
+  });
+
+  function renderChips() {
+    var box = $('chipsValue'), opts = ui.mode === 'fixed' ? [1, 5, 10, 25, 50] : [1, 2, 5, 10];
+    box.textContent = '';
+    var locked = S && S.settings_locked;
+    opts.forEach(function (n) {
+      var c = document.createElement('button');
+      c.type = 'button'; c.className = 'chip'; c.disabled = !!locked;
+      c.textContent = ui.mode === 'fixed' ? '$' + n : n + '%';
+      c.onclick = function () { ui.value = n; render(); };
+      box.appendChild(c);
+    });
+  }
+
+  /* ---------- الرسم ---------- */
+  function setStep(id, state) { $(id).className = 'step ' + state; }
+
+  function renderSteps() {
+    var linked = S && S.linked, run = isRunning();
+    setStep('st1', linked ? 'done' : 'current');
+    setStep('st2', !linked ? '' : (run ? 'done' : 'current'));
+    setStep('st3', run ? 'done' : '');
+    $('st1').firstChild.textContent = linked ? '✓' : '1';
+    $('st2').firstChild.textContent = (linked && run) ? '✓' : '2';
+    $('st3').firstChild.textContent = run ? '✓' : '3';
+  }
+
+  function renderLink() {
+    var body = $('linkBody'); body.textContent = '';
+    if (S.linked) {
+      $('linkSub').textContent = 'حسابك مرتبط وجاهز.';
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap';
+      var badge = document.createElement('span'); badge.className = 'badge ok'; badge.textContent = '✓ مرتبط';
+      row.appendChild(badge);
+      if (S.email) { var em = document.createElement('code'); em.textContent = S.email; row.appendChild(em); }
+      var un = document.createElement('button'); un.className = 'btn small ghost'; un.type = 'button'; un.textContent = 'فصل الحساب';
+      un.onclick = doUnlink; row.appendChild(un);
+      body.appendChild(row);
+      return;
+    }
+    $('linkSub').textContent = 'اربط حسابك مرة واحدة فقط. لا نطلب منك كلمة مرور Quotex في هذا الموقع.';
+    var inApp = !!(window.OscarBridge && window.OscarBridge.startConnect);
+    if (inApp) {
+      var b = document.createElement('button'); b.className = 'btn primary block'; b.type = 'button'; b.textContent = 'ربط حساب Quotex الآن';
+      b.onclick = function () { window.OscarBridge.startConnect(); };
+      body.appendChild(b);
+      var h = document.createElement('p'); h.className = 'hint'; h.textContent = 'سجّل دخولك إلى Quotex في النافذة التي ستفتح، وسيرتبط حسابك تلقائياً.';
+      body.appendChild(h);
+      return;
+    }
+    var ol = document.createElement('ol'); ol.className = 'howto';
+    ['حمّل تطبيق Oscar Linker وثبّته على هاتفك.', 'افتحه وسجّل دخولك إلى Quotex، وأدخل مفتاح التفعيل عندما يُطلب.', 'عد إلى هذه الصفحة. ستتغير الحالة إلى «مرتبط» تلقائياً.'].forEach(function (t) {
+      var li = document.createElement('li'); li.textContent = t; ol.appendChild(li);
+    });
+    body.appendChild(ol);
+    var a = document.createElement('a'); a.className = 'btn primary block'; a.href = APK; a.textContent = 'تحميل تطبيق الربط (APK)';
+    body.appendChild(a);
+    var w = document.createElement('p'); w.className = 'hint'; w.style.textAlign = 'center'; w.textContent = 'نتحقق من الربط كل بضع ثوانٍ…';
+    body.appendChild(w);
+  }
+
+  function renderSettings() {
+    var linked = S.linked, run = isRunning(), locked = !!S.settings_locked;
+    $('cardSettings').classList.toggle('is-locked', !linked);
+    $('settingsSub').textContent = linked ? 'اضبط هذه الخيارات قبل التشغيل.' : 'اربط حسابك أولاً لتفتح الإعدادات.';
+    setSeg('segAccount', ui.account); setSeg('segMode', ui.mode);
+    ['segAccount', 'segMode'].forEach(function (id) {
+      $(id).querySelectorAll('button').forEach(function (b) { b.disabled = locked; });
+    });
+    var pct = ui.mode === 'percent';
+    $('lblValue').textContent = pct ? 'مبلغ كل صفقة (% من رصيدك)' : 'مبلغ كل صفقة ($)';
+    $('lblLoss').textContent = pct ? 'أوقف عند الخسارة (%)' : 'أوقف عند الخسارة ($)';
+    $('lblProfit').textContent = pct ? 'أوقف عند الربح (%)' : 'أوقف عند الربح ($)';
+    [['inValue', 'value'], ['inLoss', 'loss'], ['inProfit', 'profit']].forEach(function (p) {
+      if (document.activeElement !== $(p[0])) $(p[0]).value = ui[p[1]];
+      $(p[0]).disabled = locked;
+    });
+    document.querySelectorAll('.stepper .icon-btn').forEach(function (b) { b.disabled = locked; });
+    renderChips();
+    $('hintValue').textContent = pct
+      ? 'مثال: 2 يعني أن كل صفقة تساوي 2% من رصيد حسابك وقت الدخول.'
+      : 'مثال: 5 يعني أن كل صفقة بمبلغ 5 دولارات ثابتة.';
+    var lim = [];
+    if (ui.loss > 0) lim.push('يتوقف التشغيل عند خسارة ' + ui.loss + (pct ? '%' : '$') + ' من رصيد البداية');
+    if (ui.profit > 0) lim.push('ويتوقف عند ربح ' + ui.profit + (pct ? '%' : '$'));
+    $('hintLimits').textContent = lim.length ? lim.join('، ') + '.' : 'لا توجد حدود إيقاف تلقائي. يُنصح بوضع حد للخسارة.';
+    $('lockHint').classList.toggle('hidden', !run);
+  }
+
+  function renderRun() {
+    var linked = S.linked, run = isRunning(), pw = $('powerBtn');
+    $('cardRun').classList.toggle('is-locked', !linked);
+    var method = run ? (S.is_auto_trading ? 'auto' : 'copy') : ui.method;
+    if (!S.admin_auto_enabled && method === 'auto' && !run) { ui.method = 'copy'; method = 'copy'; }
+    setSeg('segMethod', method);
+    $('segMethod').querySelectorAll('button').forEach(function (b) {
+      b.disabled = run || (b.getAttribute('data-v') === 'auto' && !S.admin_auto_enabled);
+    });
+    $('hintMethod').textContent = !S.admin_auto_enabled
+      ? 'التداول الآلي بالإشارات متوقف حالياً من المشرف. يمكنك نسخ الصفقات.'
+      : (method === 'copy'
+        ? 'ينسخ حسابك كل صفقة يفتحها المشرف بنفس الاتجاه.'
+        : 'ينفذ حسابك إشارات البوت تلقائياً قبل موعدها.');
+
+    pw.classList.toggle('on', run);
+    pw.disabled = busy || !linked;
+    $('powerIco').textContent = busy ? '' : '⏻';
+    if (busy) { $('powerIco').innerHTML = '<span class="spinner"></span>'; }
+    $('powerTxt').textContent = busy ? 'لحظة…' : (run ? 'إيقاف' : 'ابدأ');
+    var sl = $('statusLine'); sl.textContent = '';
+    var b = document.createElement('b');
+    if (run) { b.className = 'on'; b.textContent = (S.is_auto_trading ? 'التداول الآلي يعمل' : 'نسخ الصفقات يعمل') + ' على الحساب ' + (S.account_type === 'live' ? 'الحقيقي' : 'التجريبي'); }
+    else { b.className = 'off'; b.textContent = linked ? 'متوقف — اضغط الزر الكبير للبدء' : 'اربط حسابك لتتمكن من التشغيل'; }
+    sl.appendChild(b);
+    if (busy) { var t = document.createElement('div'); t.className = 'hint'; t.textContent = 'نتحقق من اتصال حسابك، قد يستغرق حتى دقيقة.'; sl.appendChild(t); }
+  }
+
+  function renderStats() {
+    var run = isRunning();
+    var st = lastStats;
+    $('stats').classList.toggle('hidden', !S.linked);
+    if (!S.linked) { $('statsNote').textContent = ''; return; }
+    if (!st) { $('statsNote').textContent = 'جاري قراءة الرصيد…'; return; }
+    if (!st.ok) {
+      $('stBal').textContent = '—'; $('stStart').textContent = '—'; $('stPL').textContent = '—'; $('stPL').className = 'v';
+      $('statsNote').textContent = friendly(st.error);
+      return;
+    }
+    $('statsNote').textContent = '';
+    $('stBal').textContent = money(st.balance);
+    var start = run ? (S.start_balance || st.start) : null;
+    $('stStart').textContent = start ? money(start) : '—';
+    var pl = $('stPL');
+    if (!run || !start) { pl.textContent = '—'; pl.className = 'v'; return; }
+    var diff = st.balance - start, pct = start ? diff / start * 100 : 0;
+    if (diff > 0.004) { pl.className = 'v up'; pl.textContent = '▲ +' + money(diff).slice(1) + ' (' + pct.toFixed(1) + '%)'; }
+    else if (diff < -0.004) { pl.className = 'v down'; pl.textContent = '▼ −' + money(Math.abs(diff)).slice(1) + ' (' + pct.toFixed(1) + '%)'; }
+    else { pl.className = 'v'; pl.textContent = '$0.00'; }
+  }
+
+  function renderNotice() {
+    var n = S.notification || '';
+    $('notice').classList.toggle('hidden', !n);
+    $('noticeText').textContent = n;
+  }
+
+  function render() {
+    if (!S) return;
+    renderSteps(); renderLink(); renderSettings(); renderRun(); renderStats(); renderNotice();
+  }
+
+  /* ---------- تحميل الحالة ---------- */
+  function syncUiFromServer() {
+    ui.account = S.account_type; ui.mode = S.trade_mode; ui.value = S.trade_value;
+    ui.loss = S.max_loss_value; ui.profit = S.max_profit_value;
+    if (isRunning()) ui.method = S.is_auto_trading ? 'auto' : 'copy';
+  }
+  function loadMe() {
+    return api('/api/me').then(function (d) {
+      if (!d || !d.ok) return;
+      var wasRunning = isRunning();
+      S = d;
+      if (!uiReady || isRunning() || wasRunning) { syncUiFromServer(); uiReady = true; }
+      if (!uiReady) uiReady = true;
+      render();
+    }).catch(function () {});
+  }
+  function loadStats() {
+    if (!S || !S.linked) { lastStats = null; return Promise.resolve(); }
+    var acc = isRunning() ? S.account_type : ui.account;
+    return api('/api/stats?account=' + encodeURIComponent(acc)).then(function (d) {
+      lastStats = d; if (S) renderStats();
+    }).catch(function () {});
+  }
+
+  function schedule() {
+    clearTimeout(statsTimer);
+    var wait = (S && S.linked) ? 12000 : 4000;
+    statsTimer = setTimeout(tick, wait);
+  }
+  var tickN = 0;
+  function tick() {
+    if (document.hidden || busy) { schedule(); return; }
+    tickN++;
+    loadMe().then(function () {
+      if (S && S.linked && (tickN % 2 === 0 || !lastStats)) return loadStats();
+    }).then(schedule, schedule);
+  }
+
+  /* ---------- الإجراءات ---------- */
+  function validate() {
+    clampField('value'); clampField('loss'); clampField('profit');
+    if (ui.mode === 'percent' && (ui.value < 0.1 || ui.value > 100)) return 'النسبة يجب أن تكون بين 0.1 و 100.';
+    if (ui.mode === 'fixed' && ui.value < 1) return 'المبلغ الثابت يجب ألا يقل عن 1 دولار.';
+    return '';
+  }
+
+  function start() {
+    var err = validate();
+    if (err) { render(); showToast(err, 'error'); return; }
+    var go = function () {
+      busy = true; render();
+      api('/api/start', { body: {
+        account_type: ui.account, trade_mode: ui.mode, trade_value: ui.value,
+        max_loss_value: ui.loss, max_profit_value: ui.profit, enable_type: ui.method
+      } }).then(function (d) {
+        busy = false;
+        if (d && d.ok) { showToast('تم التشغيل ✓', 'success'); lastStats = null; return loadMe().then(loadStats); }
+        showToast(friendly(d && d.error), 'error'); render();
+      }).catch(function () { busy = false; showToast('تعذر الاتصال بالخادم', 'error'); render(); });
+    };
+    if (ui.account === 'live') {
+      confirmDialog('تشغيل على الحساب الحقيقي؟', 'ستُفتح صفقات بأموالك الحقيقية وقد تخسرها كلها. هل أنت متأكد؟', 'نعم، شغّل', true).then(function (ok) { if (ok) go(); });
+    } else go();
+  }
+
+  function stop() {
+    busy = true; render();
+    api('/api/stop', { method: 'POST', body: {} }).then(function (d) {
+      busy = false;
+      if (d && d.ok) { showToast('تم الإيقاف', 'success'); lastStats = null; return loadMe().then(loadStats); }
+      showToast(friendly(d && d.error), 'error'); render();
+    }).catch(function () { busy = false; showToast('تعذر الاتصال بالخادم', 'error'); render(); });
+  }
+
+  function doUnlink() {
+    confirmDialog('فصل الحساب؟', 'سيتوقف التشغيل وتُمسح بيانات الربط. يمكنك الربط من جديد في أي وقت.', 'فصل', true).then(function (ok) {
+      if (!ok) return;
+      api('/api/unlink', { method: 'POST', body: {} }).then(function () { lastStats = null; uiReady = false; return loadMe(); });
+    });
+  }
+
+  function logout(e) {
+    if (e) e.preventDefault();
+    if (window.OscarBridge && window.OscarBridge.logout) window.OscarBridge.logout();
+    else window.location.href = '/logout';
+  }
+
+  /* ---------- ربط الأحداث ---------- */
+  bindSeg('segAccount', 'account'); bindSeg('segMode', 'mode'); bindSeg('segMethod', 'method');
+  $('powerBtn').addEventListener('click', function () { if (busy) return; if (isRunning()) stop(); else start(); });
+  $('noticeBtn').addEventListener('click', function () {
+    api('/api/clear_notification', { method: 'POST', body: {} }).then(function () { if (S) { S.notification = ''; renderNotice(); } });
+  });
+  $('logoutBtn').addEventListener('click', logout);
+  $('logoutLink').addEventListener('click', logout);
+  $('keyText').textContent = KEY;
+  $('keyChip').addEventListener('click', function () {
+    navigator.clipboard.writeText(KEY).then(function () { showToast('تم نسخ المفتاح', 'success'); }).catch(function () {});
+  });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+
+  loadMe().then(function () { return loadStats(); }).then(schedule, schedule);
+})();
+</script>
+{% endblock %}

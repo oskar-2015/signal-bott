@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0a1020">
+    <title>{% block title %}Oscar Trader AI{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <canvas id="bg" aria-hidden="true"></canvas>
+    <div class="bg-fade" aria-hidden="true"></div>
+
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <div class="page">
+        {% block body %}{% endblock %}
+    </div>
+
+    <script src="{{ url_for('static', filename='bg.js') }}"></script>
+    <script>
+    /* رسائل الخادم تظهر كإشعارات منبثقة، مع زر نسخ إذا احتوت على مفتاح */
+    function showToast(text, kind) {
+        var box = document.getElementById('toasts');
+        var el = document.createElement('div');
+        el.className = 'toast ' + (kind || '');
+        var span = document.createElement('span');
+        span.textContent = text;
+        el.appendChild(span);
+        var actions = document.createElement('div');
+        actions.className = 't-actions';
+        var m = text.match(/OSCAR-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/);
+        if (m) {
+            var cp = document.createElement('button');
+            cp.className = 'btn small primary'; cp.type = 'button'; cp.textContent = 'نسخ المفتاح';
+            cp.onclick = function () {
+                navigator.clipboard.writeText(m[0]).then(function () { cp.textContent = 'تم النسخ ✓'; });
+            };
+            actions.appendChild(cp);
+        }
+        var x = document.createElement('button');
+        x.className = 'icon-btn sm'; x.type = 'button'; x.setAttribute('aria-label', 'إغلاق'); x.textContent = '×';
+        x.onclick = function () { el.remove(); };
+        actions.appendChild(x);
+        el.appendChild(actions);
+        box.appendChild(el);
+        if (!m) setTimeout(function () { el.remove(); }, kind === 'error' ? 9000 : 5000);
+    }
+    window.showToast = showToast;
+    (function () {
+        var msgs = {{ (get_flashed_messages(with_categories=true) or [])|tojson }};
+        msgs.forEach(function (m) { showToast(m[1], m[0]); });
+    })();
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

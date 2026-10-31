@@ -6,6 +6,7 @@ import json
 import time
 import asyncio
 import threading
+import logging
 
 def _patch_pyquotex_domain():
     try:
@@ -96,6 +97,37 @@ class QuotexCopyManager:
         self._tasks = set()
         self._last_attempt = {}
         self._fail_count = {}
+        # حماية عامة من حظر Quotex (خطأ 429): عند حدوثه نوقف كل محاولات الاتصال فترة
+        self._block_until = 0.0
+        self._block_level = 0
+        self._connect_sem = asyncio.Semaphore(2)
+
+    # ---------- حماية 429 ----------
+    def rate_limit_remaining(self):
+        """كم ثانية متبقية على انتهاء إيقاف الاتصال (0 = لا يوجد إيقاف)."""
+        return max(0, int(self._block_until - time.time()))
+
+    def note_rate_limit(self):
+        """يُستدعى عند ظهور 429: يوقف الاتصال 15 دقيقة، ثم 30، ثم ساعة."""
+        self._block_level = min(self._block_level + 1, 3)
+        wait = {1: 900, 2: 1800, 3: 3600}[self._block_level]
+        self._block_until = time.time() + wait
+        print(f"[QX] 429 من Quotex — إيقاف كل محاولات الاتصال {wait // 60} دقيقة", flush=True)
+
+    def note_connect_ok(self):
+        self._block_level = 0
+
+    def sniffed_429(self):
+        """مكتبة pyquotex تكتب خطأ 429 في السجل فقط، فنلتقطه من هناك (مرة كل دقيقتين كحد أقصى)."""
+        now = time.time()
+        if now - getattr(self, "_last_sniff", 0) > 120 and self.rate_limit_remaining() == 0:
+            self._last_sniff = now
+            self.note_rate_limit()
+
+    @staticmethod
+    def is_rate_limit_error(msg):
+        m = str(msg).lower()
+        return "429" in m or "too many" in m or "rate limit" in m
 
     def start_background_loop(self):
         if self._thread and self._thread.is_alive():
@@ -161,6 +193,11 @@ class QuotexCopyManager:
         return client
 
     async def _connect_any_host(self, ssid, cookies, user_id=None, bypass_cooldown=False):
+        # إيقاف عام بعد خطأ 429
+        remaining = self.rate_limit_remaining()
+        if remaining > 0:
+            return None, None, f"rate_limited: Quotex حظر الاتصال مؤقتاً، أعد المحاولة بعد {remaining // 60 + 1} دقيقة"
+
         if user_id is not None and not bypass_cooldown:
             now = time.time()
             last = self._last_attempt.get(user_id, 0)
@@ -184,8 +221,11 @@ class QuotexCopyManager:
         for host in HOSTS_TO_TRY:
             client = None
             try:
-                client = self._make_client(ssid, cookies, host)
-                check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+                # لا أكثر من اتصالين في نفس اللحظة + فاصل قصير، حتى لا يعتبرنا Quotex هجوماً
+                async with self._connect_sem:
+                    client = self._make_client(ssid, cookies, host)
+                    check, msg = await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+                    await asyncio.sleep(1.0)
                 if check:
                     extracted = ssid or None
                     if not extracted:
@@ -197,6 +237,7 @@ class QuotexCopyManager:
                             pass
                     if user_id is not None and not bypass_cooldown:
                         self._fail_count[user_id] = 0
+                    self.note_connect_ok()
                     return client, extracted, "OK"
                 last_error = str(msg)
                 await self._safe_close(client)
@@ -207,6 +248,8 @@ class QuotexCopyManager:
                 last_error = f"{type(e).__name__}: {e}"
                 if client: await self._safe_close(client)
 
+        if self.is_rate_limit_error(last_error):
+            self.note_rate_limit()
         if user_id is not None and not bypass_cooldown:
             self._fail_count[user_id] = self._fail_count.get(user_id, 0) + 1
         return None, None, last_error
@@ -547,3 +590,16 @@ class QuotexCopyManager:
 
 
 copy_manager = QuotexCopyManager()
+
+
+class _RateLimitSniffer(logging.Handler):
+    def emit(self, record):
+        try:
+            text = record.getMessage()
+            if "429" in text and "Refused WebSocket upgrade" in text:
+                copy_manager.sniffed_429()
+        except Exception:
+            pass
+
+
+logging.getLogger("pyquotex").addHandler(_RateLimitSniffer())

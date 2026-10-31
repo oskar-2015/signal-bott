@@ -1,250 +1,306 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oskarix - لوحة المشرف</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container wide">
-        <div class="logo">OSKARIX <span>ADMIN</span></div>
-        <h1>🛠️ لوحة تحكم المشرف</h1>
+{% extends "base.html" %}
+{% block title %}Oscar Trader AI — لوحة المشرف{% endblock %}
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="alert {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
+{% macro toggle(action, on, title, desc, confirm_on, confirm_off) %}
+<form action="{{ action }}" method="POST" class="switch-row"
+      data-confirm="{{ confirm_on if on else confirm_off }}">
+  <div>
+    <div class="t">{{ title }}</div>
+    <div class="d">{{ desc }}</div>
+  </div>
+  <button class="switch" type="submit" role="switch" aria-checked="{{ 'true' if on else 'false' }}"
+          aria-label="{{ title }}"></button>
+</form>
+{% endmacro %}
 
-        <!-- الإحصائيات -->
-        <div class="stats-grid" style="grid-template-columns: 1fr 1fr 1fr;">
-            <div class="stat-box">
-                <span class="stat-number">{{ total_users }}</span>
-                <span class="stat-label">إجمالي المسجلين</span>
-            </div>
-            <div class="stat-box" style="border-color: rgba(212, 175, 55, 0.5);">
-                <span class="stat-number" style="color: #d4af37;">{{ active_copy }}</span>
-                <span class="stat-label">مفعّل النسخ (Copy)</span>
-            </div>
-            <div class="stat-box" style="border-color: rgba(76, 175, 80, 0.5);">
-                <span class="stat-number" style="color: #4caf50;">{{ active_auto }}</span>
-                <span class="stat-label">مفعّل التداول الآلي</span>
-            </div>
-        </div>
+{% macro health(ok, name, detail, ok_text='يعمل', bad_text='يحتاج انتباه', warn=False) %}
+<div class="health-row">
+  <div>
+    <div class="name">{{ name }}</div>
+    {% if detail %}<div class="detail">{{ detail }}</div>{% endif %}
+  </div>
+  {% if ok %}<span class="badge ok">✓ {{ ok_text }}</span>
+  {% elif warn %}<span class="badge wait">! {{ bad_text }}</span>
+  {% else %}<span class="badge no">✕ {{ bad_text }}</span>{% endif %}
+</div>
+{% endmacro %}
 
-        <!-- التحكم العام -->
-        <div class="card highlight" style="border-color: #d4af37;">
-            <h3>⚡ التحكم العام (Global Controls)</h3>
-            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                
-                <!-- زر التداول الآلي -->
-                <form action="/admin/toggle_auto_trading" method="POST" style="flex: 1; min-width: 200px;">
-                    <button type="submit" class="{% if admin_auto_enabled %}btn-success{% else %}btn-danger{% endif %}" 
-                            style="width: 100%; padding: 20px; font-size: 16px;"
-                            onclick="return confirm('{% if admin_auto_enabled %}سيتم إيقاف التداول الآلي عن جميع المستخدمين وإبلاغهم. متأكد؟{% else %}سيتم السماح للمستخدمين بتفعيل التداول الآلي. متأكد؟{% endif %}');">
-                        {% if admin_auto_enabled %}
-                            🤖 التداول الآلي: مفعّل (اضغط للإيقاف)
-                        {% else %}
-                            🚫 التداول الآلي: معطّل (اضغط للتفعيل)
-                        {% endif %}
-                    </button>
-                </form>
+{% block body %}
+<header class="topbar" style="max-width:1060px">
+  <a class="brand" href="/admin/panel">OSCAR <b>ADMIN</b></a>
+  <div class="top-actions">
+    <a class="icon-btn" href="/admin/panel?tab={{ tab }}" aria-label="تحديث" title="تحديث" style="text-decoration:none">↻</a>
+    <a class="icon-btn" href="/admin/logout" aria-label="تسجيل الخروج" title="تسجيل الخروج" style="text-decoration:none">⏻</a>
+  </div>
+</header>
 
-                <!-- زر بوت التلجرام -->
-                <form action="/admin/toggle_telegram_bot" method="POST" style="flex: 1; min-width: 200px;">
-                    <button type="submit" class="{% if admin_bot_enabled %}btn-success{% else %}btn-danger{% endif %}" 
-                            style="width: 100%; padding: 20px; font-size: 16px;"
-                            onclick="return confirm('{% if admin_bot_enabled %}سيتم إيقاف إرسال الإشارات إلى تلجرام. متأكد؟{% else %}سيتم تفعيل إرسال الإشارات إلى تلجرام. متأكد؟{% endif %}');">
-                        {% if admin_bot_enabled %}
-                            📢 بوت تلجرام: مفعّل (اضغط للإيقاف)
-                        {% else %}
-                            🔕 بوت تلجرام: معطّل (اضغط للتفعيل)
-                        {% endif %}
-                    </button>
-                </form>
+<main class="wrap wide">
+  <nav class="tabs" aria-label="أقسام اللوحة">
+    <a href="?tab=status" {% if tab == 'status' %}aria-current="page"{% endif %}>الحالة والتحكم</a>
+    <a href="?tab=keys" {% if tab == 'keys' %}aria-current="page"{% endif %}>المفاتيح</a>
+    <a href="?tab=users" {% if tab == 'users' %}aria-current="page"{% endif %}>المستخدمون</a>
+    <a href="?tab=logs" {% if tab == 'logs' %}aria-current="page"{% endif %}>الصفقات</a>
+  </nav>
 
-            </div>
-        </div>
+  <div class="kpis">
+    <div class="kpi"><span class="n">{{ total_users }}</span><span class="l">مستخدمون مسجلون</span></div>
+    <div class="kpi"><span class="n">{{ linked_users }}</span><span class="l">حسابات مرتبطة</span></div>
+    <div class="kpi"><span class="n" style="color:var(--gold)">{{ active_copy }}</span><span class="l">ينسخون الآن</span></div>
+    <div class="kpi"><span class="n" style="color:var(--up)">{{ active_auto }}</span><span class="l">تداول آلي الآن</span></div>
+  </div>
 
-        <!-- إنشاء مفتاح -->
-        <div class="card">
-            <h3>➕ إنشاء مفتاح تفعيل</h3>
-            <form action="/admin/create_key" method="POST">
-                <select name="hours">
-                    {% for h, label in key_duration_options %}
-                        <option value="{{ h }}" {% if h == 24 %}selected{% endif %}>{{ label }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">إنشاء مفتاح</button>
-            </form>
-        </div>
+  {# ================= الحالة والتحكم ================= #}
+  {% if tab == 'status' %}
+  <section class="card">
+    <h2>التحكم العام</h2>
+    <p class="sub">هذه المفاتيح تؤثر على كل المستخدمين فوراً.</p>
+    {{ toggle('/admin/toggle_auto_trading', admin_auto_enabled,
+              'التداول الآلي بالإشارات',
+              'عند الإيقاف يتوقف تداول جميع المستخدمين الآلي ويصلهم إشعار.',
+              'سيتم إيقاف التداول الآلي عن جميع المستخدمين وإبلاغهم. متأكد؟',
+              'سيتم السماح للمستخدمين بتفعيل التداول الآلي. متأكد؟') }}
+    {{ toggle('/admin/toggle_telegram_bot', admin_bot_enabled,
+              'إرسال الإشارات إلى تيليجرام',
+              'عند الإيقاف يستمر البوت بالتحليل لكن لا يرسل شيئاً للقناة.',
+              'سيتوقف إرسال الإشارات إلى قناة تيليجرام. متأكد؟',
+              'سيبدأ إرسال الإشارات إلى قناة تيليجرام. متأكد؟') }}
+  </section>
 
-        <!-- جدول المفاتيح -->
-        <div class="card">
-            <h3>📋 المفاتيح</h3>
-            {% if licenses %}
-            <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>المفتاح</th>
-                        <th>ينتهي</th>
-                        <th>الحالة</th>
-                        <th>الجهاز</th>
-                        <th>إجراءات</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for lic in licenses %}
-                    <tr>
-                        <td>
-                            <code class="key-cell" id="key-{{ loop.index }}">{{ lic.key }}</code>
-                            <button type="button" class="btn-small btn-copy" onclick="copyKey('key-{{ loop.index }}', event)" title="نسخ">📋</button>
-                        </td>
-                        <td style="font-size: 12px;">{{ lic.expires_at[:16].replace('T', ' ') ~ ' UTC' if lic.expires_at else 'للأبد' }}</td>
-                        <td>
-                            {% if lic.is_active %}
-                                <span class="badge active">فعّال</span>
-                            {% else %}
-                                <span class="badge inactive">موقوف</span>
-                            {% endif %}
-                        </td>
-                        <td style="font-size: 12px;">
-                            {% if lic.device_ip %}
-                                🔒 مربوط
-                                <form action="/admin/reset_device" method="POST" style="display:inline;">
-                                    <input type="hidden" name="key" value="{{ lic.key }}">
-                                    <button type="submit" class="btn-small btn-secondary">إعادة تعيين</button>
-                                </form>
-                            {% else %}—{% endif %}
-                        </td>
-                        <td>
-                            <form action="/admin/toggle_key" method="POST" style="display:inline;">
-                                <input type="hidden" name="key" value="{{ lic.key }}">
-                                {% if lic.is_active %}
-                                    <input type="hidden" name="action" value="deactivate">
-                                    <button type="submit" class="btn-small btn-warning" onclick="return confirm('سيتم إيقاف المفتاح مؤقتاً وطرد المستخدم. متأكد؟');">إيقاف مؤقت</button>
-                                {% else %}
-                                    <input type="hidden" name="action" value="activate">
-                                    <button type="submit" class="btn-small btn-success">تفعيل</button>
-                                {% endif %}
-                            </form>
-                            <form action="/admin/delete_key" method="POST" style="display:inline;"
-                                  onsubmit="return confirm('حذف نهائي للمفتاح وكل بيانات المستخدم؟');">
-                                <input type="hidden" name="key" value="{{ lic.key }}">
-                                <button type="submit" class="btn-small btn-danger">حذف نهائي</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            </div>
-            {% else %}
-                <p style="text-align: center; color: #666;">لا توجد مفاتيح بعد</p>
-            {% endif %}
-        </div>
-
-        <!-- حساب المشرف (بدون إعدادات نسبة أو حفظ) -->
-        <div class="card {% if not master_linked %}highlight{% endif %}">
-            <h3>👑 حساب المشرف (الماستر)</h3>
-            {% if master_linked %}
-                <p style="color: #81c784; text-align: center; font-size: 16px;">
-                    ✅ الحساب مرتبط
-                </p>
-                <form action="/admin/clear_master" method="POST" style="margin-bottom: 20px;"
-                      onsubmit="return confirm('سيتم فصل حساب المشرف الحالي. متأكد؟');">
-                    <button type="submit" class="btn-danger">🗑️ فصل حساب المشرف</button>
-                </form>
-            {% else %}
-                <p style="color: #f0e0a0; text-align: center; font-size: 15px; line-height: 1.8;">
-                    ⚠️ الحساب غير مرتبط.<br>
-                    يرجى فتح <strong>تطبيق المدير</strong>، والذهاب إلى تبويب <strong>"السوق"</strong>، وتسجيل الدخول هناك لربط الحساب تلقائياً.
-                </p>
-            {% endif %}
-        </div>
-
-        <!-- المستخدمون -->
-        <div class="card">
-            <h3>👥 المستخدمون</h3>
-            <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>المفتاح</th>
-                        <th>الحساب</th>
-                        <th>النسخ</th>
-                        <th>الآلي</th>
-                        <th>الرصيد</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for u in users_list %}
-                    <tr>
-                        <td><code style="font-size: 10px;">{{ u.license_key }}</code></td>
-                        <td>{{ 'تجريبي' if u.account_type == 'demo' else 'حقيقي' }}</td>
-                        <td>{% if u.is_copying %}<span class="badge active">مفعّل</span>{% else %}—{% endif %}</td>
-                        <td>{% if u.is_auto_trading %}<span class="badge active" style="background:#2e7d32;">مفعّل</span>{% else %}—{% endif %}</td>
-                        <td style="font-size: 11px;">{% if u.start_balance %}${{ "%.2f"|format(u.start_balance) }}{% else %}—{% endif %}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            </div>
-        </div>
-
-        <!-- سجل الصفقات -->
-        <div class="card">
-            <h3>📜 آخر الصفقات المنسوخة</h3>
-            {% if logs %}
-            <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>الأصل</th>
-                        <th>الاتجاه</th>
-                        <th>المبلغ</th>
-                        <th>المنسوخون</th>
-                        <th>الوقت</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for log in logs %}
-                    <tr>
-                        <td>{{ log.asset }}</td>
-                        <td>{{ log.direction|upper }}</td>
-                        <td>{% if log.amount %}${{ "%.2f"|format(log.amount) }}{% else %}—{% endif %}</td>
-                        <td>{{ log.follower_count }}</td>
-                        <td style="font-size: 11px;">{{ log.created_at }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            </div>
-            {% else %}
-                <p style="text-align: center; color: #666;">لا توجد صفقات بعد</p>
-            {% endif %}
-        </div>
-
-        <a href="/admin/logout" class="logout">تسجيل خروج</a>
+  <section class="card">
+    <h2>صحة النظام</h2>
+    <p class="sub">إذا ظهر شيء بالأحمر فهو سبب أي عطل. اتبع الشرح تحت كل عنصر.</p>
+    <div class="health">
+      {{ health(system.db_mode == 'turso',
+                'قاعدة البيانات',
+                ('متصلة بـ Turso — البيانات محفوظة بشكل دائم' if system.db_mode == 'turso'
+                 else ('تعمل مؤقتاً على قاعدة محلية وتُمسح عند إعادة التشغيل! السبب: ' ~ (system.db_error or 'غير مضبوطة') ~ ' — صحّح TURSO_AUTH_TOKEN في Render')),
+                'متصلة', 'غير دائمة') }}
+      {{ health(system.master_linked,
+                'حساب المشرف (الماستر)',
+                ('مرتبط — ' ~ ('تجريبي' if system.master_account == 'demo' else 'حقيقي')) if system.master_linked
+                else 'غير مرتبط: افتح تطبيق المدير وسجّل الدخول من تبويب السوق',
+                'مرتبط', 'غير مرتبط') }}
+      {{ health(system.telegram_ok,
+                'إعدادات تيليجرام',
+                'التوكن ومعرف القناة موجودان' if system.telegram_ok else 'أضف TELEGRAM_BOT_TOKEN و TELEGRAM_CHAT_ID في Render',
+                'مضبوطة', 'ناقصة') }}
+      {{ health(system.signals_env,
+                'بوت الإشارات',
+                (system.bot_status or 'لا توجد حالة بعد') if system.signals_env else 'غير مفعّل: اجعل ENABLE_SIGNALS = true في Render',
+                'مفعّل', 'متوقف') }}
+      {% if system.quotex_block_min %}
+      {{ health(false, 'اتصال Quotex', 'Quotex حظر الاتصال مؤقتاً (429). الانتظار المتبقي تقريباً: ' ~ system.quotex_block_min ~ ' دقيقة. البوت ينتظر تلقائياً.', 'سليم', 'محظور مؤقتاً', True) }}
+      {% endif %}
+      {% if system.last_signal %}
+      <div class="health-row">
+        <div><div class="name">آخر إشارة</div><div class="detail">{{ system.last_signal }}</div></div>
+        <span class="badge idle">{{ system.last_signal_at.replace('T', ' ') }} UTC</span>
+      </div>
+      {% endif %}
+      {% if system.weak_password %}
+      {{ health(false, 'كلمة مرور المشرف', 'قصيرة أو ضعيفة. غيّرها من ADMIN_PASSWORD في Render (12 حرفاً أو أكثر).', 'قوية', 'ضعيفة', True) }}
+      {% endif %}
+      {% if system.api_open %}
+      {{ health(false, 'حماية واجهة تطبيق المدير', 'مفتوحة لأي شخص يعرف الرابط. بعد تحديث تطبيق المدير سنفعّل ADMIN_API_TOKEN.', 'محمية', 'غير محمية', True) }}
+      {% endif %}
     </div>
-    <script>
-        function copyKey(id, event) {
-            const el = document.getElementById(id);
-            if (!el) return;
-            const text = el.textContent.trim();
-            navigator.clipboard.writeText(text).then(function () {
-                const btn = event.target;
-                const old = btn.textContent;
-                btn.textContent = '✓';
-                setTimeout(function () { btn.textContent = old; }, 1000);
-            }).catch(function () {
-                alert('انسخ المفتاح يدوياً: ' + text);
-            });
-        }
-    </script>
-</body>
-</html>
+  </section>
+
+  <section class="card">
+    <h2>بوت تيليجرام</h2>
+    <p class="sub">أرسل رسالة اختبار للتأكد أن البوت يصل للقناة.</p>
+    <form action="/admin/test_telegram" method="POST">
+      <button class="btn primary" type="submit" {% if not system.telegram_ok %}disabled{% endif %}>إرسال رسالة اختبار</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>حساب المشرف (الماستر)</h2>
+    {% if system.master_linked %}
+    <p class="sub">الحساب مرتبط. لتغييره افصله ثم اربط حساباً جديداً من تطبيق المدير.</p>
+    <form action="/admin/clear_master" method="POST" data-confirm="سيتم فصل حساب المشرف الحالي. متأكد؟">
+      <button class="btn bad" type="submit">فصل حساب المشرف</button>
+    </form>
+    {% else %}
+    <ol class="howto">
+      <li>افتح تطبيق المدير (Oscar Admin) على هاتفك.</li>
+      <li>اذهب إلى تبويب «السوق» وسجّل دخولك إلى Quotex.</li>
+      <li>سيرتبط الحساب تلقائياً، ثم اضغط ↻ هنا للتحديث.</li>
+    </ol>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ================= المفاتيح ================= #}
+  {% if tab == 'keys' %}
+  <section class="card">
+    <h2>إنشاء مفتاح تفعيل</h2>
+    <p class="sub">اختر مدة الاشتراك ثم أنشئ المفتاح وأرسله للمستخدم.</p>
+    <form action="/admin/create_key" method="POST" class="create-row">
+      <select name="hours" aria-label="مدة المفتاح">
+        {% for h, label in key_duration_options %}
+        <option value="{{ h }}" {% if h == 24 %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn primary" type="submit">إنشاء المفتاح</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>المفاتيح ({{ licenses|length }})</h2>
+    {% if licenses %}
+    <input class="search" id="keySearch" type="text" placeholder="ابحث عن مفتاح…" aria-label="بحث" style="direction:ltr;text-align:start">
+    <div class="table-wrap">
+      <table id="keysTable">
+        <thead><tr><th>المفتاح</th><th>ينتهي</th><th>الحالة</th><th>الجهاز</th><th>إجراءات</th></tr></thead>
+        <tbody>
+        {% for lic in licenses %}
+        <tr>
+          <td>
+            <code>{{ lic.key }}</code>
+            <button type="button" class="icon-btn sm" data-copy="{{ lic.key }}" aria-label="نسخ المفتاح" title="نسخ">⧉</button>
+          </td>
+          <td>{{ (lic.expires_at[:16].replace('T', ' ') ~ ' UTC') if lic.expires_at else 'للأبد' }}</td>
+          <td>{% if lic.is_active %}<span class="badge ok">فعّال</span>{% else %}<span class="badge no">موقوف</span>{% endif %}</td>
+          <td>
+            {% if lic.device_ip %}
+            <form action="/admin/reset_device" method="POST" style="display:inline">
+              <input type="hidden" name="key" value="{{ lic.key }}">
+              <span class="badge idle">🔒 مرتبط</span>
+              <button class="btn small ghost" type="submit">إعادة تعيين</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <form action="/admin/toggle_key" method="POST"
+                    {% if lic.is_active %}data-confirm="سيتم إيقاف المفتاح مؤقتاً وإخراج المستخدم. متأكد؟"{% endif %}>
+                <input type="hidden" name="key" value="{{ lic.key }}">
+                {% if lic.is_active %}
+                <input type="hidden" name="action" value="deactivate">
+                <button class="btn small" type="submit">إيقاف مؤقت</button>
+                {% else %}
+                <input type="hidden" name="action" value="activate">
+                <button class="btn small good" type="submit">تفعيل</button>
+                {% endif %}
+              </form>
+              <form action="/admin/delete_key" method="POST" data-confirm="حذف نهائي للمفتاح وكل بيانات المستخدم؟ لا يمكن التراجع.">
+                <input type="hidden" name="key" value="{{ lic.key }}">
+                <button class="btn small bad" type="submit">حذف</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="sub">لا توجد مفاتيح بعد. أنشئ أول مفتاح من الأعلى.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ================= المستخدمون ================= #}
+  {% if tab == 'users' %}
+  <section class="card">
+    <h2>المستخدمون ({{ users_list|length }})</h2>
+    {% if users_list %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>المفتاح</th><th>الربط</th><th>الحساب</th><th>النسخ</th><th>الآلي</th><th>رصيد البداية</th></tr></thead>
+        <tbody>
+        {% for u in users_list %}
+        <tr>
+          <td><code>{{ u.license_key }}</code></td>
+          <td>{% if u.quotex_ssid %}<span class="badge ok">مرتبط</span>{% else %}<span class="badge idle">غير مرتبط</span>{% endif %}</td>
+          <td>{{ 'تجريبي' if u.account_type == 'demo' else 'حقيقي' }}</td>
+          <td>{% if u.is_copying %}<span class="badge ok">يعمل</span>{% else %}—{% endif %}</td>
+          <td>{% if u.is_auto_trading %}<span class="badge ok">يعمل</span>{% else %}—{% endif %}</td>
+          <td>{% if u.start_balance %}${{ "%.2f"|format(u.start_balance) }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="sub">لم يسجّل أحد الدخول بعد.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ================= الصفقات ================= #}
+  {% if tab == 'logs' %}
+  <section class="card">
+    <h2>آخر الصفقات</h2>
+    {% if logs %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>الأصل</th><th>الاتجاه</th><th>المبلغ</th><th>عدد من نُسخت لهم</th><th>الوقت (UTC)</th></tr></thead>
+        <tbody>
+        {% for log in logs %}
+        <tr>
+          <td>{{ log.asset }}</td>
+          <td>{% if log.direction == 'call' %}<span class="badge ok">▲ صعود</span>{% else %}<span class="badge no">▼ هبوط</span>{% endif %}</td>
+          <td>{% if log.amount %}${{ "%.2f"|format(log.amount) }}{% else %}—{% endif %}</td>
+          <td>{{ log.follower_count }}</td>
+          <td>{{ log.created_at }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="sub">لا توجد صفقات بعد.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</main>
+
+<dialog id="dlg">
+  <h3>تأكيد</h3>
+  <p id="dlgText"></p>
+  <div class="row">
+    <button class="btn" type="button" id="dlgNo">إلغاء</button>
+    <button class="btn primary" type="button" id="dlgYes">نعم</button>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  /* نموذج يحتوي data-confirm يسأل قبل الإرسال */
+  var dlg = document.getElementById('dlg');
+  document.querySelectorAll('form[data-confirm]').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+      if (f.dataset.ok === '1') return;
+      e.preventDefault();
+      document.getElementById('dlgText').textContent = f.getAttribute('data-confirm');
+      var yes = document.getElementById('dlgYes'), no = document.getElementById('dlgNo');
+      yes.onclick = function () { dlg.close(); f.dataset.ok = '1'; f.submit(); };
+      no.onclick = function () { dlg.close(); };
+      if (dlg.showModal) dlg.showModal();
+      else if (window.confirm(f.getAttribute('data-confirm'))) { f.dataset.ok = '1'; f.submit(); }
+    });
+  });
+
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function () {
+        var old = b.textContent; b.textContent = '✓';
+        setTimeout(function () { b.textContent = old; }, 1200);
+      });
+    });
+  });
+
+  var s = document.getElementById('keySearch');
+  if (s) s.addEventListener('input', function () {
+    var q = s.value.trim().toUpperCase();
+    document.querySelectorAll('#keysTable tbody tr').forEach(function (tr) {
+      tr.style.display = tr.textContent.toUpperCase().indexOf(q) > -1 ? '' : 'none';
+    });
+  });
+})();
+</script>
+{% endblock %}
